@@ -1,0 +1,28 @@
+[Service]
+HTTPListenAddr = "localhost:8445"
+RPCConcurrency = 10
+RPCTimeout = "10s"
+
+[Account]
+Mode = "keystore"
+KeystorePath = "./keystore"
+Password = "bsc-mev-sentry"
+Address = "0x55dae0C297Adb92c96165ac699c8A15a500249b1"
+
+[[Validators]]
+PrivateURL = "http://localhost:8545"
+PublicHostName = "localhost"
+
+[[Builders]]
+Address = "0x295e26495CEF6F69dFA69911d9D8e4F3bBadB89B"
+URL = "http://localhost:8546"
+
+[FullNode]
+URL = "http://localhost:8545"
+
+[Debug]
+ListenAddr = "localhost:6060"
+
+[Log]
+RootDir = "./logs"
+Level = "debug"
