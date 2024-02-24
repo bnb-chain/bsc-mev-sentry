@@ -81,14 +81,14 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 		return common.Hash{}, errors.New("validator hostname not found")
 	}
 
-	builder, err := types.ParseBidSignature(args)
+	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
 		return common.Hash{}, err
 	}
 
-	if args.Bid.BuilderFee != nil && args.Bid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
-		payBidTx, err := s.account.PayBidTx(ctx, s.fullNode, builder, args.Bid.BuilderFee)
+	if args.RawBid.BuilderFee != nil && args.RawBid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
+		payBidTx, err := s.account.PayBidTx(ctx, s.fullNode, builder, args.RawBid.BuilderFee)
 		if err != nil {
 			log.Errorw("failed to create pay bid tx", "err", err)
 			return common.Hash{}, err
