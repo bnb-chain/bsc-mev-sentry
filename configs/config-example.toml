@@ -1,27 +1,27 @@
 [Service]
-HTTPListenAddr = "localhost:8445"
+HTTPListenAddr = "localhost:3000"
 RPCConcurrency = 10
 RPCTimeout = "10s"
 
 [Account]
 Mode = "keystore"
 KeystorePath = "./keystore"
-Password = "bsc-mev-sentry"
-Address = "0x55dae0C297Adb92c96165ac699c8A15a500249b1"
+Password = "sentry"
+Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
 
 [[Validators]]
-PrivateURL = "http://localhost:8545"
-PublicHostName = "localhost"
+PrivateURL = "http://127.0.0.1:8546"
+PublicHostName = "127.0.0.1"
 
 [[Builders]]
 Address = "0x295e26495CEF6F69dFA69911d9D8e4F3bBadB89B"
-URL = "http://localhost:8546"
+URL = "http://localhost:8555"
 
 [FullNode]
 URL = "http://localhost:8545"
 
 [Debug]
-ListenAddr = "localhost:6060"
+ListenAddr = "localhost:8090"
 
 [Log]
 RootDir = "./logs"

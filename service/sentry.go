@@ -77,7 +77,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 
 	validator, ok := s.validators[hostname]
 	if !ok {
-		log.Errorw("validator not found", "hostname", "localhost")
+		log.Errorw("validator not found", "hostname", hostname)
 		return common.Hash{}, errors.New("validator hostname not found")
 	}
 
@@ -88,8 +88,8 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 	}
 
 	if args.RawBid.BuilderFee != nil && args.RawBid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
-		payBidTx, err := s.account.PayBidTx(ctx, s.fullNode, builder, args.RawBid.BuilderFee)
-		if err != nil {
+		payBidTx, er := s.account.PayBidTx(ctx, s.fullNode, builder, args.RawBid.BuilderFee)
+		if er != nil {
 			log.Errorw("failed to create pay bid tx", "err", err)
 			return common.Hash{}, err
 		}
@@ -98,6 +98,66 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 	}
 
 	return validator.SendBid(ctx, args)
+}
+
+func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error) {
+	method := "mev_bestBidGasFee"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		return nil, errors.New("validator hostname not found")
+	}
+
+	return validator.BestBidGasFee(ctx, parentHash)
+}
+
+func (s *MevSentry) Params(ctx context.Context) (*types.MevParams, error) {
+	method := "mev_params"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		return nil, errors.New("validator hostname not found")
+	}
+
+	return validator.MevParams(ctx)
+}
+
+func (s *MevSentry) Running(ctx context.Context) (bool, error) {
+	method := "mev_running"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		return false, errors.New("validator hostname not found")
+	}
+
+	return validator.MevRunning(), nil
 }
 
 func (s *MevSentry) ReportIssue(ctx context.Context, args types.BidIssue) error {

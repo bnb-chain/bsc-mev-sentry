@@ -40,6 +40,8 @@ var (
 type Validator interface {
 	SendBid(context.Context, types.BidArgs) (common.Hash, error)
 	MevRunning() bool
+	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
+	MevParams(ctx context.Context) (*types.MevParams, error)
 }
 
 type ValidatorConfig struct {
@@ -95,4 +97,12 @@ func (n *validator) refresh() {
 	}
 
 	n.mevRunning = mevRunning
+}
+
+func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error) {
+	return n.client.BestBidGasFee(ctx, parentHash)
+}
+
+func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
+	return n.client.MevParams(ctx)
 }
