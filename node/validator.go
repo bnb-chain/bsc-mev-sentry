@@ -78,7 +78,6 @@ type validator struct {
 	client *ethclient.Client
 
 	scheduler  *gocron.Scheduler
-	chainID    *big.Int
 	mevRunning bool
 }
 

@@ -309,8 +309,8 @@ func (zl *logger) sweetenFields(args []interface{}, skipCaller int) []zap.Field 
 			usedFields[keyStr] += 1
 			if usedFields[keyStr] > 1 {
 				keyStr += strconv.Itoa(usedFields[keyStr])
-
 			}
+
 			fields = append(fields, zap.Any(keyStr, val))
 		}
 		i += 2
