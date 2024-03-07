@@ -12,6 +12,7 @@ require (
 	github.com/naoina/toml v0.1.2-0.20170918210437-9fafd6967416
 	github.com/prometheus/client_golang v1.18.0
 	github.com/stretchr/testify v1.8.4
+	github.com/tredeske/u v0.0.0-20240301202545-cc23fee03f7c
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.26.0
 )

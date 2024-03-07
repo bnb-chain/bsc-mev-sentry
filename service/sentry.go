@@ -12,11 +12,11 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/tredeske/u/ustrings"
 
 	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/node"
-	"github.com/bnb-chain/bsc-mev-sentry/utils"
 )
 
 var (
@@ -198,11 +198,11 @@ func timeoutCancel(ctx *context.Context, timeout Duration) func() {
 type Duration time.Duration
 
 func (d Duration) MarshalText() ([]byte, error) {
-	return utils.UnsafeStringToBytes(time.Duration(d).String()), nil
+	return ustrings.UnsafeStringToBytes(time.Duration(d).String()), nil
 }
 
 func (d *Duration) UnmarshalText(text []byte) error {
-	dd, err := time.ParseDuration(utils.UnsafeBytesToString(text))
+	dd, err := time.ParseDuration(ustrings.UnsafeBytesToString(text))
 	*d = Duration(dd)
 	return err
 }
