@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -84,7 +85,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
-		return common.Hash{}, err
+		return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 	}
 
 	if args.RawBid.BuilderFee != nil && args.RawBid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
@@ -160,7 +161,7 @@ func (s *MevSentry) Running(ctx context.Context) (bool, error) {
 	return validator.MevRunning(), nil
 }
 
-func (s *MevSentry) ReportIssue(ctx context.Context, args types.BidIssue) error {
+func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) error {
 	method := "mev_reportIssue"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -169,13 +170,15 @@ func (s *MevSentry) ReportIssue(ctx context.Context, args types.BidIssue) error 
 	var builder node.Builder
 	var ok bool
 
-	builder, ok = s.builders[args.Builder]
+	builder, ok = s.builders[issue.Builder]
 	if !ok {
-		log.Errorw("builder not found", "address", args.Builder)
+		log.Errorw("builder not found", "address", issue.Builder)
 		return errors.New("builder not found")
 	}
 
-	return builder.ReportIssue(ctx, args)
+	fmt.Sprintf("issue: %+v", issue)
+
+	return builder.ReportIssue(ctx, issue)
 }
 
 func recordLatency(method string, start time.Time) {
