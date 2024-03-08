@@ -176,7 +176,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) error
 		return errors.New("builder not found")
 	}
 
-	fmt.Sprintf("issue: %+v", issue)
+	log.Debugw("report issue", "builder", builder, "issue", issue)
 
 	return builder.ReportIssue(ctx, issue)
 }
