@@ -1,0 +1,7 @@
+.idea/
+logs/
+.build/
+keystore/
+
+# Coverage
+coverage.*
