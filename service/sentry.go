@@ -46,20 +46,18 @@ type MevSentry struct {
 	account    account.Account
 	validators map[string]node.Validator       // hostname -> validator
 	builders   map[common.Address]node.Builder // address -> builder
-	fullNode   node.FullNode
 }
 
 func NewMevSentry(cfg *Config,
 	account account.Account,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
-	fullNode node.FullNode) *MevSentry {
+) *MevSentry {
 	s := &MevSentry{
 		timeout:    cfg.RPCTimeout,
 		account:    account,
 		validators: validators,
 		builders:   builders,
-		fullNode:   fullNode,
 	}
 
 	return s
@@ -88,15 +86,13 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 		return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 	}
 
-	if args.RawBid.BuilderFee != nil && args.RawBid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
-		payBidTx, er := s.account.PayBidTx(ctx, s.fullNode, builder, args.RawBid.BuilderFee)
-		if er != nil {
-			log.Errorw("failed to create pay bid tx", "err", err)
-			return common.Hash{}, err
-		}
-
-		args.PayBidTx = payBidTx
+	payBidTx, er := s.account.PayBidTx(ctx, builder, args.RawBid.BuilderFee)
+	if er != nil {
+		log.Errorw("failed to create pay bid tx", "err", err)
+		return common.Hash{}, err
 	}
+
+	args.PayBidTx = payBidTx
 
 	return validator.SendBid(ctx, args)
 }

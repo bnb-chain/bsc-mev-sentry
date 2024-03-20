@@ -10,6 +10,7 @@ require (
 	github.com/go-co-op/gocron v1.37.0
 	github.com/json-iterator/go v1.1.12
 	github.com/naoina/toml v0.1.2-0.20170918210437-9fafd6967416
+	github.com/node-real/go-pkg v0.0.5
 	github.com/prometheus/client_golang v1.18.0
 	github.com/stretchr/testify v1.8.4
 	github.com/tredeske/u v0.0.0-20240301202545-cc23fee03f7c

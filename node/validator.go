@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -47,6 +48,7 @@ type Validator interface {
 type ValidatorConfig struct {
 	PrivateURL     string
 	PublicHostName string
+	BidFeeCeil     uint64
 }
 
 func NewValidator(config *ValidatorConfig) Validator {
@@ -82,6 +84,12 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
+	bidFeeCeil := big.NewInt(int64(n.cfg.BidFeeCeil))
+
+	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
+		return common.Hash{}, fmt.Errorf("bid fee exceeds the ceiling %v", n.cfg.BidFeeCeil)
+	}
+
 	return n.client.SendBid(ctx, args)
 }
 

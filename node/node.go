@@ -16,6 +16,7 @@ import (
 type FullNode interface {
 	ChainID() *big.Int
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
+	Balance(context.Context, common.Address) (*big.Int, error)
 }
 
 type FullNodeConfig struct {
@@ -60,6 +61,10 @@ func (f *fullNode) ChainID() *big.Int {
 
 func (f *fullNode) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
 	return f.client.PendingNonceAt(ctx, account)
+}
+
+func (f *fullNode) Balance(ctx context.Context, account common.Address) (*big.Int, error) {
+	return f.client.BalanceAt(ctx, account, nil)
 }
 
 func (f *fullNode) refresh() {
