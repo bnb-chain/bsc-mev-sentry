@@ -1,10 +1,11 @@
 package account
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"errors"
 	"math/big"
+	"os"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -13,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
-	"github.com/bnb-chain/bsc-mev-sentry/node"
 )
 
 type Mode string
@@ -24,7 +24,8 @@ const (
 )
 
 type Account interface {
-	PayBidTx(context.Context, node.FullNode, common.Address, *big.Int) ([]byte, error)
+	Address() common.Address
+	SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 }
 
 func New(config *Config) (Account, error) {
@@ -32,9 +33,9 @@ func New(config *Config) (Account, error) {
 	case privateKeyMode:
 		return newPrivateKeyAccount(config.PrivateKey)
 	case keystoreMode:
-		return newKeystoreAccount(config.KeystorePath, config.Password, config.Address)
+		return newKeystoreAccount(config.KeystorePath, config.PasswordFilePath, config.Address)
 	default:
-		return nil, errors.New("invalid account mode")
+		return nil, errors.New("invalid pay account mode")
 	}
 }
 
@@ -44,24 +45,36 @@ type Config struct {
 	PrivateKey string
 	// KeystorePath path of keystore
 	KeystorePath string
-	// Password keystore password
-	Password string
+	// PasswordFilePath stores keystore password
+	PasswordFilePath string
 	// Address public address of sentry wallet
 	Address string
+}
+
+type baseAccount struct {
+	address common.Address
+}
+
+func (a *baseAccount) Address() common.Address {
+	return a.address
 }
 
 type keystoreAccount struct {
 	keystore *keystore.KeyStore
 	account  accounts.Account
+	*baseAccount
 }
 
-func newKeystoreAccount(keystorePath, password, opAccount string) (*keystoreAccount, error) {
+func newKeystoreAccount(keystorePath, passwordFilePath, opAccount string) (*keystoreAccount, error) {
+	address := common.HexToAddress(opAccount)
 	ks := keystore.NewKeyStore(keystorePath, keystore.StandardScryptN, keystore.StandardScryptP)
-	account, err := ks.Find(accounts.Account{Address: common.HexToAddress(opAccount)})
+	account, err := ks.Find(accounts.Account{Address: address})
 	if err != nil {
 		log.Errorw("failed to create key store account", "err", err)
 		return nil, err
 	}
+
+	password := MakePasswordFromPath(passwordFilePath)
 
 	err = ks.Unlock(account, password)
 	if err != nil {
@@ -69,35 +82,27 @@ func newKeystoreAccount(keystorePath, password, opAccount string) (*keystoreAcco
 		return nil, err
 	}
 
-	return &keystoreAccount{ks, account}, nil
-}
-
-func (k *keystoreAccount) PayBidTx(ctx context.Context, fullNode node.FullNode, receiver common.Address, amount *big.Int) ([]byte, error) {
-	nonce, err := fetchNonce(ctx, fullNode, k.account.Address)
+	err = os.Remove(passwordFilePath)
 	if err != nil {
-		return nil, err
+		log.Errorw("failed to remove password file", "err", err)
 	}
 
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: big.NewInt(0),
-		Gas:      25000,
-		To:       &receiver,
-		Value:    amount,
-	})
+	return &keystoreAccount{ks, account, &baseAccount{address: address}}, nil
+}
 
-	signedTx, err := k.keystore.SignTx(k.account, tx, fullNode.ChainID())
+func (k *keystoreAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	signedTx, err := k.keystore.SignTx(k.account, tx, chainID)
 	if err != nil {
 		log.Errorw("failed to sign tx", "err", err)
 		return nil, err
 	}
 
-	return signedTx.MarshalBinary()
+	return signedTx, nil
 }
 
 type privateKeyAccount struct {
-	key     *ecdsa.PrivateKey
-	address common.Address
+	key *ecdsa.PrivateKey
+	*baseAccount
 }
 
 func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
@@ -116,38 +121,31 @@ func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
 
 	addr := crypto.PubkeyToAddress(*pubKeyECDSA)
 
-	return &privateKeyAccount{key, addr}, nil
+	return &privateKeyAccount{key, &baseAccount{address: addr}}, nil
 }
 
-func (p *privateKeyAccount) PayBidTx(ctx context.Context, fullNode node.FullNode, receiver common.Address, amount *big.Int) ([]byte, error) {
-	nonce, err := fetchNonce(ctx, fullNode, p.address)
-	if err != nil {
-		return nil, err
-	}
-
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: big.NewInt(0),
-		Gas:      25000,
-		To:       &receiver,
-		Value:    amount,
-	})
-
-	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(fullNode.ChainID()), p.key)
+func (p *privateKeyAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), p.key)
 	if err != nil {
 		log.Errorw("failed to sign tx", "err", err)
 		return nil, err
 	}
 
-	return signedTx.MarshalBinary()
+	return signedTx, nil
 }
 
-func fetchNonce(ctx context.Context, fullNode node.FullNode, address common.Address) (uint64, error) {
-	nonce, err := fullNode.PendingNonceAt(ctx, address)
+func MakePasswordFromPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	text, err := os.ReadFile(path)
 	if err != nil {
-		log.Errorw("failed to get nonce", "err", err)
-		return 0, err
+		log.Panicw("failed to read password file: %v", err)
+	}
+	lines := strings.Split(string(text), "\n")
+	if len(lines) == 0 {
+		return ""
 	}
 
-	return nonce, err
+	return strings.TrimRight(lines[0], "\r")
 }

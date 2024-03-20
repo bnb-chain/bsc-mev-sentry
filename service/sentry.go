@@ -5,30 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tredeske/u/ustrings"
 
-	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
+	"github.com/bnb-chain/bsc-mev-sentry/metrics"
 	"github.com/bnb-chain/bsc-mev-sentry/node"
-)
-
-var (
-	namespace = "bsc_mev_sentry"
-
-	apiLatencyHist = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Subsystem: "api",
-		Name:      "latency",
-		Buckets:   prometheus.ExponentialBuckets(0.01, 3, 15),
-	}, []string{"method"})
 )
 
 type Config struct {
@@ -43,33 +31,35 @@ type Config struct {
 type MevSentry struct {
 	timeout Duration
 
-	account    account.Account
 	validators map[string]node.Validator       // hostname -> validator
 	builders   map[common.Address]node.Builder // address -> builder
-	fullNode   node.FullNode
 }
 
 func NewMevSentry(cfg *Config,
-	account account.Account,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
-	fullNode node.FullNode) *MevSentry {
+) *MevSentry {
 	s := &MevSentry{
 		timeout:    cfg.RPCTimeout,
-		account:    account,
 		validators: validators,
 		builders:   builders,
-		fullNode:   fullNode,
 	}
 
 	return s
 }
 
-func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
+func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash common.Hash, err error) {
 	method := "mev_sendBid"
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
 
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
@@ -79,33 +69,49 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
-		return common.Hash{}, errors.New("validator hostname not found")
+		err = types.NewInvalidBidError("validator hostname not found")
+		return
+	}
+
+	bidFeeCeil := validator.BuilderFeeCeil()
+
+	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
+		log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
+		err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
+		return
 	}
 
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
-		return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		return
 	}
 
-	if args.RawBid.BuilderFee != nil && args.RawBid.BuilderFee.Cmp(big.NewInt(0)) > 0 {
-		payBidTx, er := s.account.PayBidTx(ctx, s.fullNode, builder, args.RawBid.BuilderFee)
-		if er != nil {
-			log.Errorw("failed to create pay bid tx", "err", err)
-			return common.Hash{}, err
-		}
-
-		args.PayBidTx = payBidTx
+	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
+	if err != nil {
+		log.Errorw("failed to create pay bid tx", "err", err)
+		err = newSentryError("failed to create pay bid tx")
+		return
 	}
+
+	args.PayBidTx = payBidTx
 
 	return validator.SendBid(ctx, args)
 }
 
-func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error) {
+func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {
 	method := "mev_bestBidGasFee"
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
 
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
@@ -115,17 +121,26 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
-		return nil, errors.New("validator hostname not found")
+		err = types.NewInvalidBidError("validator hostname not found")
+		return
 	}
 
-	return validator.BestBidGasFee(ctx, parentHash)
+	fee, err = validator.BestBidGasFee(ctx, parentHash)
+	return
 }
 
-func (s *MevSentry) Params(ctx context.Context) (*types.MevParams, error) {
+func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err error) {
 	method := "mev_params"
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
 
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
@@ -135,17 +150,27 @@ func (s *MevSentry) Params(ctx context.Context) (*types.MevParams, error) {
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
-		return nil, errors.New("validator hostname not found")
+		err = types.NewInvalidBidError("validator hostname not found")
+		return
 	}
 
-	return validator.MevParams(ctx)
+	param, err = validator.MevParams(ctx)
+	return
 }
 
-func (s *MevSentry) Running(ctx context.Context) (bool, error) {
+func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 	method := "mev_running"
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
+	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
 
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
@@ -155,17 +180,25 @@ func (s *MevSentry) Running(ctx context.Context) (bool, error) {
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
-		return false, errors.New("validator hostname not found")
+		err = types.NewInvalidBidError("validator hostname not found")
+		return
 	}
 
 	return validator.MevRunning(), nil
 }
 
-func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) error {
+func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err error) {
 	method := "mev_reportIssue"
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
 
 	var builder node.Builder
 	var ok bool
@@ -173,16 +206,18 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) error
 	builder, ok = s.builders[issue.Builder]
 	if !ok {
 		log.Errorw("builder not found", "address", issue.Builder)
-		return errors.New("builder not found")
+		err = errors.New("builder not found")
+		return
 	}
 
 	log.Debugw("report issue", "builder", builder, "issue", issue)
 
-	return builder.ReportIssue(ctx, issue)
+	err = builder.ReportIssue(ctx, issue)
+	return
 }
 
 func recordLatency(method string, start time.Time) {
-	apiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.ApiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
 }
 
 func nilCancel() {
