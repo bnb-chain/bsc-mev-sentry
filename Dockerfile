@@ -11,10 +11,6 @@ RUN apk add --no-cache build-base git bash linux-headers eudev-dev curl ca-certi
 WORKDIR /build
 COPY . .
 
-ARG GH_TOKEN=""
-RUN go env -w GOPRIVATE="github.com/bnb-chain/*"
-RUN git config --global url."https://${GH_TOKEN}@github.com".insteadOf "https://github.com"
-
 RUN go mod tidy
 RUN go build -o .build/sentry ./cmd
 
