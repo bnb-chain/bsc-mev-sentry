@@ -5,8 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/node-real/go-pkg/utils/syncutils"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bnb-chain/bsc-mev-sentry/syncutils"
 )
 
 func TestBatchRun(t *testing.T) {
