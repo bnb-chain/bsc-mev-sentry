@@ -1,4 +1,41 @@
 # BSC-MEV-Sentry
 
-BSC-MEV-Sentry is a proxy service within the BSC MEV architecture designed to shield the validator network.
-It functions to forward requests and pay to builders.
+BSC-MEV-Sentry serves as the proxy service for BSC MEV architecture, It has the following features:
+
+1. Forward RPC requests under mev namespace to builders.
+2. Pay builders for their bid.
+3. Monitor validators' status and health.
+
+See also: https://github.com/bnb-chain/BEPs/pull/322
+
+# Usage
+
+Sentry settings are configured in the `config.toml` file. The following is an example of a `config.toml` file:
+
+```
+[Service]
+HTTPListenAddr = "localhost:8555"
+RPCConcurrency = 10
+RPCTimeout = "10s"
+
+[Account]
+Mode = "keystore"
+KeystorePath = "./keystore"
+Password = "sentry"
+Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
+
+[[Validators]]
+PrivateURL = "http://127.0.0.1:8545"
+PublicHostName = "127.0.0.1"
+
+[[Builders]]
+Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
+URL = "http://x.x.x.x:8546"
+
+[Chain]
+URL = "http://x.x.x.x:8547"
+```
+
+- `Validators`: A list of validators to send bid for.
+    - `PrivateURL`: The rpc url of the validator.
+    - `PublicHostName`: The domain name of the validator.
