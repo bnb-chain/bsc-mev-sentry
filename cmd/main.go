@@ -40,9 +40,7 @@ func main() {
 
 	log.Infow("bsc mev-sentry start", "configPath", *configPath, "config", cfg)
 
-	fullNode := node.NewFullNode(&cfg.FullNode)
-
-	acc, err := account.New(&cfg.Account, fullNode)
+	acc, err := account.New(&cfg.Account)
 	if err != nil {
 		log.Panicw("failed to create account", "err", err)
 	}
@@ -63,8 +61,10 @@ func main() {
 		}
 	}
 
+	chain := node.NewChain(&cfg.CommonNode)
+
 	rpcServer := rpc.NewServer()
-	sentryService := service.NewMevSentry(&cfg.Service, acc, validators, builders)
+	sentryService := service.NewMevSentry(&cfg.Service, acc, validators, builders, chain)
 	if err = rpcServer.RegisterName("mev", sentryService); err != nil {
 		panic(err)
 	}

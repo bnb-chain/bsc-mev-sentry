@@ -1,7 +1,6 @@
 package account
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"errors"
 	"math/big"
@@ -13,8 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
-	"github.com/bnb-chain/bsc-mev-sentry/node"
-	"github.com/bnb-chain/bsc-mev-sentry/syncutils"
 )
 
 type Mode string
@@ -25,15 +22,16 @@ const (
 )
 
 type Account interface {
-	PayBidTx(context.Context, common.Address, *big.Int) ([]byte, error)
+	Address() common.Address
+	SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 }
 
-func New(config *Config, fullNode node.FullNode) (Account, error) {
+func New(config *Config) (Account, error) {
 	switch config.Mode {
 	case privateKeyMode:
-		return newPrivateKeyAccount(config.PrivateKey, fullNode)
+		return newPrivateKeyAccount(config.PrivateKey)
 	case keystoreMode:
-		return newKeystoreAccount(config.KeystorePath, config.Password, config.Address, fullNode)
+		return newKeystoreAccount(config.KeystorePath, config.Password, config.Address)
 	default:
 		return nil, errors.New("invalid account mode")
 	}
@@ -55,10 +53,9 @@ type keystoreAccount struct {
 	keystore *keystore.KeyStore
 	address  common.Address
 	account  accounts.Account
-	fullNode node.FullNode
 }
 
-func newKeystoreAccount(keystorePath, password, opAccount string, fullNode node.FullNode) (*keystoreAccount, error) {
+func newKeystoreAccount(keystorePath, password, opAccount string) (*keystoreAccount, error) {
 	address := common.HexToAddress(opAccount)
 	ks := keystore.NewKeyStore(keystorePath, keystore.StandardScryptN, keystore.StandardScryptP)
 	account, err := ks.Find(accounts.Account{Address: address})
@@ -73,49 +70,29 @@ func newKeystoreAccount(keystorePath, password, opAccount string, fullNode node.
 		return nil, err
 	}
 
-	return &keystoreAccount{ks, address, account, fullNode}, nil
+	return &keystoreAccount{ks, address, account}, nil
 }
 
-func (k *keystoreAccount) PayBidTx(ctx context.Context, receiver common.Address, amount *big.Int) ([]byte, error) {
-	// take pay bid tx as block tag
-	if amount == nil {
-		amount = big.NewInt(0)
-	}
-
-	balance, nonce, err := prev(ctx, k.fullNode, k.address)
-	if err != nil {
-		return nil, err
-	}
-
-	if balance.Cmp(amount) < 0 {
-		log.Errorw("insufficient balance", "balance", balance, "amount", amount)
-		return nil, errors.New("insufficient balance")
-	}
-
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: big.NewInt(0),
-		Gas:      25000,
-		To:       &receiver,
-		Value:    amount,
-	})
-
-	signedTx, err := k.keystore.SignTx(k.account, tx, k.fullNode.ChainID())
+func (k *keystoreAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	signedTx, err := k.keystore.SignTx(k.account, tx, chainID)
 	if err != nil {
 		log.Errorw("failed to sign tx", "err", err)
 		return nil, err
 	}
 
-	return signedTx.MarshalBinary()
+	return signedTx, nil
+}
+
+func (k *keystoreAccount) Address() common.Address {
+	return k.address
 }
 
 type privateKeyAccount struct {
-	key      *ecdsa.PrivateKey
-	address  common.Address
-	fullNode node.FullNode
+	key     *ecdsa.PrivateKey
+	address common.Address
 }
 
-func newPrivateKeyAccount(privateKey string, fullNode node.FullNode) (*privateKeyAccount, error) {
+func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
 	key, err := crypto.HexToECDSA(privateKey)
 	if err != nil {
 		log.Errorw("failed to load private key", "err", err)
@@ -131,66 +108,19 @@ func newPrivateKeyAccount(privateKey string, fullNode node.FullNode) (*privateKe
 
 	addr := crypto.PubkeyToAddress(*pubKeyECDSA)
 
-	return &privateKeyAccount{key, addr, fullNode}, nil
+	return &privateKeyAccount{key, addr}, nil
 }
 
-func (p *privateKeyAccount) PayBidTx(ctx context.Context, receiver common.Address, amount *big.Int) ([]byte, error) {
-	// take pay bid tx as block tag
-	if amount == nil {
-		amount = big.NewInt(0)
-	}
-
-	balance, nonce, err := prev(ctx, p.fullNode, p.address)
-	if err != nil {
-		return nil, err
-	}
-
-	if balance.Cmp(amount) < 0 {
-		log.Errorw("insufficient balance", "balance", balance, "amount", amount)
-		return nil, errors.New("insufficient balance")
-	}
-
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: big.NewInt(0),
-		Gas:      25000,
-		To:       &receiver,
-		Value:    amount,
-	})
-
-	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(p.fullNode.ChainID()), p.key)
+func (p *privateKeyAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), p.key)
 	if err != nil {
 		log.Errorw("failed to sign tx", "err", err)
 		return nil, err
 	}
 
-	return signedTx.MarshalBinary()
+	return signedTx, nil
 }
 
-func prev(ctx context.Context, fullNode node.FullNode, address common.Address) (balance *big.Int, nonce uint64, err error) {
-	err = syncutils.BatchRun(
-		func() error {
-			var er error
-			balance, er = fullNode.Balance(ctx, address)
-			if er != nil {
-				return er
-			}
-
-			return nil
-		},
-		func() error {
-			var er error
-			nonce, er = fullNode.PendingNonceAt(ctx, address)
-			if er != nil {
-				return er
-			}
-
-			return nil
-		})
-
-	if err != nil {
-		log.Errorw("failed to query sentry balance or nonce", "err", err)
-	}
-
-	return
+func (p *privateKeyAccount) Address() common.Address {
+	return p.address
 }
