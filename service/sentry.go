@@ -115,7 +115,9 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	bidFeeCeil := big.NewInt(int64(validator.BidFeeCeil()))
 
 	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
-		return common.Hash{}, fmt.Errorf("bid fee exceeds the ceiling %v", validator.BidFeeCeil())
+		log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
+		err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
+		return
 	}
 
 	builder, err := args.EcrecoverSender()
