@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -43,6 +42,7 @@ type Validator interface {
 	MevRunning() bool
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
 	MevParams(ctx context.Context) (*types.MevParams, error)
+	BidFeeCeil() uint64
 }
 
 type ValidatorConfig struct {
@@ -84,12 +84,6 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
-	bidFeeCeil := big.NewInt(int64(n.cfg.BidFeeCeil))
-
-	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
-		return common.Hash{}, fmt.Errorf("bid fee exceeds the ceiling %v", n.cfg.BidFeeCeil)
-	}
-
 	return n.client.SendBid(ctx, args)
 }
 
@@ -112,4 +106,8 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 
 func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
 	return n.client.MevParams(ctx)
+}
+
+func (n *validator) BidFeeCeil() uint64 {
+	return n.cfg.BidFeeCeil
 }

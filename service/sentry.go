@@ -112,6 +112,12 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		return
 	}
 
+	bidFeeCeil := big.NewInt(int64(validator.BidFeeCeil()))
+
+	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
+		return common.Hash{}, fmt.Errorf("bid fee exceeds the ceiling %v", validator.BidFeeCeil())
+	}
+
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
