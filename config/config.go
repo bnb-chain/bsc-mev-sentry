@@ -19,7 +19,7 @@ type Config struct {
 	Account    account.Config
 	Validators []node.ValidatorConfig
 	Builders   []node.BuilderConfig
-	CommonNode node.ChainConfig
+	ChainRPC   node.ChainRPCConfig
 
 	Debug DebugConfig
 	Log   LogConfig

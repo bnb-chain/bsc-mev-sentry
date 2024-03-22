@@ -47,7 +47,7 @@ var (
 
 	chainError = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace,
-		Subsystem: "chain",
+		Subsystem: "chainRPC",
 		Name:      "error",
 	})
 )
@@ -67,21 +67,21 @@ type MevSentry struct {
 	account    account.Account
 	validators map[string]node.Validator       // hostname -> validator
 	builders   map[common.Address]node.Builder // address -> builder
-	chain      node.Chain
+	chainRPC   node.ChainRPC
 }
 
 func NewMevSentry(cfg *Config,
 	account account.Account,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
-	chain node.Chain,
+	chain node.ChainRPC,
 ) *MevSentry {
 	s := &MevSentry{
 		timeout:    cfg.RPCTimeout,
 		account:    account,
 		validators: validators,
 		builders:   builders,
-		chain:      chain,
+		chainRPC:   chain,
 	}
 
 	return s
@@ -142,7 +142,7 @@ func (s *MevSentry) GeneratePayBidTx(ctx context.Context, builder common.Address
 	err := syncutils.BatchRun(
 		func() error {
 			var er error
-			balance, er = s.chain.Balance(ctx, s.account.Address())
+			balance, er = s.chainRPC.Balance(ctx, s.account.Address())
 			if er != nil {
 				return er
 			}
@@ -151,7 +151,7 @@ func (s *MevSentry) GeneratePayBidTx(ctx context.Context, builder common.Address
 		},
 		func() error {
 			var er error
-			nonce, er = s.chain.PendingNonceAt(ctx, s.account.Address())
+			nonce, er = s.chainRPC.PendingNonceAt(ctx, s.account.Address())
 			if er != nil {
 				return er
 			}

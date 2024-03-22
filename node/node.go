@@ -13,17 +13,17 @@ import (
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 )
 
-type Chain interface {
+type ChainRPC interface {
 	ChainID() *big.Int
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
 	Balance(context.Context, common.Address) (*big.Int, error)
 }
 
-type ChainConfig struct {
+type ChainRPCConfig struct {
 	URL string
 }
 
-func NewChain(config *ChainConfig) Chain {
+func NewChain(config *ChainRPCConfig) ChainRPC {
 	cli, err := ethclient.DialOptions(context.Background(), config.URL, rpc.WithHTTPClient(client))
 	if err != nil {
 		log.Errorw("failed to dial validator", "url", config.URL, "err", err)
@@ -48,7 +48,7 @@ func NewChain(config *ChainConfig) Chain {
 }
 
 type fullNode struct {
-	cfg    *ChainConfig
+	cfg    *ChainRPCConfig
 	client *ethclient.Client
 
 	scheduler *gocron.Scheduler

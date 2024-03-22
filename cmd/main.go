@@ -61,10 +61,10 @@ func main() {
 		}
 	}
 
-	chain := node.NewChain(&cfg.CommonNode)
+	chainRPC := node.NewChain(&cfg.ChainRPC)
 
 	rpcServer := rpc.NewServer()
-	sentryService := service.NewMevSentry(&cfg.Service, acc, validators, builders, chain)
+	sentryService := service.NewMevSentry(&cfg.Service, acc, validators, builders, chainRPC)
 	if err = rpcServer.RegisterName("mev", sentryService); err != nil {
 		panic(err)
 	}

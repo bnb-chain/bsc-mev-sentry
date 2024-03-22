@@ -2,7 +2,7 @@
 
 BSC-MEV-Sentry serves as the proxy service for BSC MEV architecture, It has the following features:
 
-1. Forward RPC requests under mev namespace to builders.
+1. Forward RPC requests under mev namespace to validators/builders.
 2. Pay builders for their bid.
 3. Monitor validators' status and health.
 
@@ -25,8 +25,16 @@ Password = "sentry"
 Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
 
 [[Validators]]
-PrivateURL = "http://127.0.0.1:8545"
-PublicHostName = "127.0.0.1"
+PrivateURL = "https://bsc-fuji"
+PublicHostName = "bsc-fuji"
+
+[[Validators]]
+PrivateURL = "https://bsc-mathwallet"
+PublicHostName = "bsc-mathwallet"
+
+[[Validators]]
+PrivateURL = "https://bsc-trustwallet"
+PublicHostName = "bsc-trustwallet"
 
 [[Builders]]
 Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
