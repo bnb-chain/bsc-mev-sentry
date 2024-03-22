@@ -1,28 +1,22 @@
 [Service]
-HTTPListenAddr = "localhost:3000"
-RPCConcurrency = 10
-RPCTimeout = "10s"
+HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
+RPCConcurrency = 100 # The maximum number of concurrent requests.
+RPCTimeout = "10s" # The timeout for RPC requests.
 
-[Account]
-Mode = "keystore"
-KeystorePath = "./keystore"
-Password = "sentry"
-Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
-
-[[Validators]]
-PrivateURL = "http://127.0.0.1:8546"
-PublicHostName = "127.0.0.1"
+[[Validators]] # A list of validators to forward requests to.
+PrivateURL = "https://127.0.0.1:8545" # The private rpc url of the validator, it can only been accessed in the local network.
+PublicHostName = "127.0.0.1" # The domain name of the validator, if a request's HOST info is same with this, it will be forwarded to the validator.
+BidFeeCeil = 100000
+AccountMode = "privateKey" # The unlock mode of the account.
+PrivateKey = "59ba8068eb256d520179e903f43dacf6d8d57d72bd306e1bd603fdb8c8da10e8"
 
 [[Builders]]
-Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
-URL = "http://localhost:8555"
+Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5" # The address of the builder.
+URL = "http://bsc-builder-1" # The public URL of the builder.
 
-[FullNode]
-URL = "http://localhost:8545"
+[[Builders]]
+Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5"
+URL = "http://bsc-builder-2"
 
-[Debug]
-ListenAddr = "localhost:8090"
-
-[Log]
-RootDir = "./logs"
-Level = "debug"
+[ChainRPC]
+URL = "https://bsc-dataseed1.bnbchain.org"

@@ -10,46 +10,13 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tredeske/u/ustrings"
 
-	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
+	"github.com/bnb-chain/bsc-mev-sentry/metrics"
 	"github.com/bnb-chain/bsc-mev-sentry/node"
-	"github.com/bnb-chain/bsc-mev-sentry/syncutils"
-)
-
-var (
-	namespace = "bsc_mev_sentry"
-
-	apiLatencyHist = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Subsystem: "api",
-		Name:      "latency",
-		Buckets:   prometheus.ExponentialBuckets(0.01, 3, 15),
-	}, []string{"method"})
-
-	apiErrorCounter = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: "api",
-		Name:      "error",
-	}, []string{"method", "code"})
-
-	accountError = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: "account",
-		Name:      "error",
-	}, []string{"reason"})
-
-	chainError = promauto.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: "chainRPC",
-		Name:      "error",
-	})
 )
 
 type Config struct {
@@ -64,21 +31,18 @@ type Config struct {
 type MevSentry struct {
 	timeout Duration
 
-	account    account.Account
 	validators map[string]node.Validator       // hostname -> validator
 	builders   map[common.Address]node.Builder // address -> builder
 	chainRPC   node.ChainRPC
 }
 
 func NewMevSentry(cfg *Config,
-	account account.Account,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
 	chain node.ChainRPC,
 ) *MevSentry {
 	s := &MevSentry{
 		timeout:    cfg.RPCTimeout,
-		account:    account,
 		validators: validators,
 		builders:   builders,
 		chainRPC:   chain,
@@ -95,7 +59,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
-				apiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
 			}
 		}
 	}()
@@ -127,7 +91,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		return
 	}
 
-	payBidTx, err := s.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
+	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
@@ -139,73 +103,6 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	return validator.SendBid(ctx, args)
 }
 
-func (s *MevSentry) GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
-	// take pay bid tx as block tag
-	var (
-		amount  = big.NewInt(0)
-		balance *big.Int
-		nonce   uint64
-	)
-
-	err := syncutils.BatchRun(
-		func() error {
-			var er error
-			balance, er = s.chainRPC.Balance(ctx, s.account.Address())
-			if er != nil {
-				return er
-			}
-
-			return nil
-		},
-		func() error {
-			var er error
-			nonce, er = s.chainRPC.PendingNonceAt(ctx, s.account.Address())
-			if er != nil {
-				return er
-			}
-
-			return nil
-		})
-
-	if err != nil {
-		chainError.Inc()
-		log.Errorw("failed to query sentry balance or nonce", "err", err)
-		return nil, err
-	}
-
-	if builderFee != nil {
-		amount = builderFee
-	}
-
-	if balance.Cmp(amount) < 0 {
-		accountError.WithLabelValues("insufficient_balance").Inc()
-		log.Errorw("insufficient balance", "balance", balance.Uint64(), "builderFee", builderFee.Uint64())
-		return nil, errors.New("insufficient balance")
-	}
-
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		GasPrice: big.NewInt(0),
-		Gas:      25000,
-		To:       &builder,
-		Value:    amount,
-	})
-
-	signedTx, err := s.account.SignTx(tx, amount)
-	if err != nil {
-		log.Errorw("failed to sign pay bid tx", "err", err)
-		return nil, err
-	}
-
-	payBidTx, err := signedTx.MarshalBinary()
-	if err != nil {
-		log.Errorw("failed to marshal pay bid tx", "err", err)
-		return nil, err
-	}
-
-	return payBidTx, nil
-}
-
 func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {
 	method := "mev_bestBidGasFee"
 	start := time.Now()
@@ -214,7 +111,7 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
-				apiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
 			}
 		}
 	}()
@@ -243,7 +140,7 @@ func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err err
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
-				apiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
 			}
 		}
 	}()
@@ -273,7 +170,7 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
-				apiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
 			}
 		}
 	}()
@@ -301,7 +198,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
-				apiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
 			}
 		}
 	}()
@@ -323,7 +220,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 }
 
 func recordLatency(method string, start time.Time) {
-	apiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.ApiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
 }
 
 func nilCancel() {

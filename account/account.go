@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -24,6 +25,10 @@ const (
 type Account interface {
 	Address() common.Address
 	SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
+	SetBalance(balance *big.Int)
+	GetBalance() *big.Int
+	SetNonce(nonce uint64)
+	GetNonce() uint64
 }
 
 func New(config *Config) (Account, error) {
@@ -31,9 +36,9 @@ func New(config *Config) (Account, error) {
 	case privateKeyMode:
 		return newPrivateKeyAccount(config.PrivateKey)
 	case keystoreMode:
-		return newKeystoreAccount(config.KeystorePath, config.Password, config.Address)
+		return newKeystoreAccount(config.KeystorePath, config.PasswordFilePath, config.Address)
 	default:
-		return nil, errors.New("invalid account mode")
+		return nil, errors.New("invalid baseAccount mode")
 	}
 }
 
@@ -43,34 +48,70 @@ type Config struct {
 	PrivateKey string
 	// KeystorePath path of keystore
 	KeystorePath string
-	// Password keystore password
-	Password string
+	// PasswordFilePath stores keystore password
+	PasswordFilePath string
 	// Address public address of sentry wallet
 	Address string
 }
 
-type keystoreAccount struct {
-	keystore *keystore.KeyStore
-	address  common.Address
-	account  accounts.Account
+type baseAccount struct {
+	balance *big.Int
+	nonce   uint64
+	address common.Address
 }
 
-func newKeystoreAccount(keystorePath, password, opAccount string) (*keystoreAccount, error) {
+func (a *baseAccount) Address() common.Address {
+	return a.address
+}
+
+func (a *baseAccount) SetBalance(balance *big.Int) {
+	a.balance = balance
+}
+
+func (a *baseAccount) GetBalance() *big.Int {
+	return a.balance
+}
+
+func (a *baseAccount) SetNonce(nonce uint64) {
+	a.nonce = nonce
+}
+
+func (a *baseAccount) GetNonce() uint64 {
+	return a.nonce
+}
+
+type keystoreAccount struct {
+	keystore *keystore.KeyStore
+	account  accounts.Account
+	*baseAccount
+}
+
+func newKeystoreAccount(keystorePath, passwordFilePath, opAccount string) (*keystoreAccount, error) {
 	address := common.HexToAddress(opAccount)
 	ks := keystore.NewKeyStore(keystorePath, keystore.StandardScryptN, keystore.StandardScryptP)
 	account, err := ks.Find(accounts.Account{Address: address})
 	if err != nil {
-		log.Errorw("failed to create key store account", "err", err)
+		log.Errorw("failed to create key store baseAccount", "err", err)
 		return nil, err
 	}
 
-	err = ks.Unlock(account, password)
-	if err != nil {
-		log.Errorw("failed to unlock account", "err", err)
+	passwords := utils.MakePasswordListFromPath(passwordFilePath)
+
+	var unlock bool
+	for _, password := range passwords {
+		err = ks.Unlock(account, password)
+		if err == nil {
+			unlock = true
+			break
+		}
+	}
+
+	if !unlock {
+		log.Errorw("failed to unlock baseAccount", "err", err)
 		return nil, err
 	}
 
-	return &keystoreAccount{ks, address, account}, nil
+	return &keystoreAccount{ks, account, &baseAccount{address: address}}, nil
 }
 
 func (k *keystoreAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
@@ -83,13 +124,9 @@ func (k *keystoreAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*type
 	return signedTx, nil
 }
 
-func (k *keystoreAccount) Address() common.Address {
-	return k.address
-}
-
 type privateKeyAccount struct {
-	key     *ecdsa.PrivateKey
-	address common.Address
+	key *ecdsa.PrivateKey
+	*baseAccount
 }
 
 func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
@@ -108,7 +145,7 @@ func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
 
 	addr := crypto.PubkeyToAddress(*pubKeyECDSA)
 
-	return &privateKeyAccount{key, addr}, nil
+	return &privateKeyAccount{key, &baseAccount{address: addr}}, nil
 }
 
 func (p *privateKeyAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
@@ -119,8 +156,4 @@ func (p *privateKeyAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*ty
 	}
 
 	return signedTx, nil
-}
-
-func (p *privateKeyAccount) Address() common.Address {
-	return p.address
 }
