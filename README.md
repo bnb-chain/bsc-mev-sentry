@@ -10,6 +10,9 @@ See also: https://github.com/bnb-chain/BEPs/pull/322
 
 # Usage
 
+1. `make build`
+2. `.build/sentry -config ./configs/config.toml`
+
 Sentry settings are configured in the `config.toml` file. The following is an example of a `config.toml` file:
 
 ```
