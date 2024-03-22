@@ -24,21 +24,21 @@ RPCTimeout = "10s" # The timeout for RPC requests.
 [[Validators]] # A list of validators to forward requests to.
 PrivateURL = "https://bsc-fuji" # The private rpc url of the validator, it can only been accessed in the local network.
 PublicHostName = "bsc-fuji" # The domain name of the validator, if a request's HOST info is same with this, it will be forwarded to the validator.
-AccountMode = "privateKey" # The unlock mode of the pay bid account.
+PayAccountMode = "privateKey" # The unlock mode of the pay bid account.
 PrivateKey = "59ba8068eb256d520179e903f43dacf6d8d57d72bd306e1bd603fdb8c8da10e8" # The private key of the pay bid account.
 
 [[Validators]]
 PrivateURL = "https://bsc-mathwallet"
 PublicHostName = "bsc-mathwallet"
-AccountMode = "keystore"
+PayAccountMode = "keystore"
 KeystorePath = "./keystore" # The keystore file path of the pay bid account.
 PasswordFilePath = "./password.txt" # The path of the pay bid account's password file.
-Address = "0x12c86Bf9...845B98F23" # The address of the pay bid account.
+PayAccountAddress = "0x12c86Bf9...845B98F23" # The address of the pay bid account.
 
 [[Validators]]
 PrivateURL = "https://bsc-trustwallet"
 PublicHostName = "bsc-trustwallet"
-AccountMode = "privateKey" # The unlock mode of the pay account.
+PayAccountMode = "privateKey" # The unlock mode of the pay account.
 PrivateKey = "59ba8068eb256d520179e903f43dacf6d8d57d72bd306e1bd603fdb8c8da10e8" # The private key of the pay account.
 
 [[Builders]]

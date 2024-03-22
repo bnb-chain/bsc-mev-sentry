@@ -55,15 +55,15 @@ type ValidatorConfig struct {
 	PublicHostName string
 	BidFeeCeil     uint64
 
-	AccountMode account.Mode
+	PayAccountMode account.Mode
 	// PrivateKey private key of sentry wallet
 	PrivateKey string
 	// KeystorePath path of keystore
 	KeystorePath string
 	// PasswordFilePath stores keystore password
 	PasswordFilePath string
-	// AccountAddress public address of sentry wallet
-	AccountAddress string
+	// PayAccountAddress public address of sentry wallet
+	PayAccountAddress string
 }
 
 func NewValidator(config *ValidatorConfig) Validator {
@@ -74,11 +74,11 @@ func NewValidator(config *ValidatorConfig) Validator {
 	}
 
 	acc, err := account.New(&account.Config{
-		Mode:             config.AccountMode,
+		Mode:             config.PayAccountMode,
 		PrivateKey:       config.PrivateKey,
 		KeystorePath:     config.KeystorePath,
 		PasswordFilePath: config.PasswordFilePath,
-		Address:          config.AccountAddress})
+		Address:          config.PayAccountAddress})
 	if err != nil {
 		log.Panicw("failed to create account", "err", err)
 	}
