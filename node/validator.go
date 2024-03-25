@@ -122,7 +122,7 @@ func (n *validator) refresh() {
 	mevRunning, err := n.client.MevRunning(context.Background())
 	if err != nil {
 		metrics.ChainError.Inc()
-		log.Errorw("failed to fetch mev running status", "err", err)
+		log.Errorw("failed to fetch mev running status", "url", n.cfg.PrivateURL, "err", err)
 	}
 
 	n.mevRunning = mevRunning
