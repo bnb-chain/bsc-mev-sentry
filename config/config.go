@@ -17,7 +17,6 @@ type Config struct {
 	Service    service.Config
 	Validators []node.ValidatorConfig
 	Builders   []node.BuilderConfig
-	ChainRPC   node.ChainRPCConfig
 
 	Debug DebugConfig
 	Log   LogConfig

@@ -33,19 +33,16 @@ type MevSentry struct {
 
 	validators map[string]node.Validator       // hostname -> validator
 	builders   map[common.Address]node.Builder // address -> builder
-	chainRPC   node.ChainRPC
 }
 
 func NewMevSentry(cfg *Config,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
-	chain node.ChainRPC,
 ) *MevSentry {
 	s := &MevSentry{
 		timeout:    cfg.RPCTimeout,
 		validators: validators,
 		builders:   builders,
-		chainRPC:   chain,
 	}
 
 	return s
