@@ -39,13 +39,7 @@ func main() {
 
 	log.Infow("bsc mev-sentry start", "configPath", *configPath, "config", cfg)
 
-	validators := make(map[string]node.Validator)
-	for _, v := range cfg.Validators {
-		validator := node.NewValidator(&v)
-		if validator != nil {
-			validators[v.PublicHostName] = validator
-		}
-	}
+	validators := node.NewValidators(cfg.Validators)
 
 	builders := make(map[common.Address]node.Builder)
 	for _, b := range cfg.Builders {

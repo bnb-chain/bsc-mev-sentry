@@ -18,17 +18,13 @@ import (
 type Mode string
 
 const (
-	privateKeyMode Mode = "privateKey"
+	privateKeyMode Mode = "privatekey"
 	keystoreMode   Mode = "keystore"
 )
 
 type Account interface {
 	Address() common.Address
 	SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
-	SetBalance(balance *big.Int)
-	GetBalance() *big.Int
-	SetNonce(nonce uint64)
-	GetNonce() uint64
 }
 
 func New(config *Config) (Account, error) {
@@ -62,22 +58,6 @@ type baseAccount struct {
 
 func (a *baseAccount) Address() common.Address {
 	return a.address
-}
-
-func (a *baseAccount) SetBalance(balance *big.Int) {
-	a.balance = balance
-}
-
-func (a *baseAccount) GetBalance() *big.Int {
-	return a.balance
-}
-
-func (a *baseAccount) SetNonce(nonce uint64) {
-	a.nonce = nonce
-}
-
-func (a *baseAccount) GetNonce() uint64 {
-	return a.nonce
 }
 
 type keystoreAccount struct {

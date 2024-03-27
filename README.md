@@ -3,7 +3,7 @@
 BSC-MEV-Sentry serves as the proxy service for BSC MEV architecture, It has the following features:
 
 1. Forward RPC requests under mev namespace to validators/builders.
-2. Pay builders for their bid.
+2. Pay builders on behalf of validators for their bids.
 3. Monitor validators' status and health.
 
 See also: https://github.com/bnb-chain/BEPs/pull/322
