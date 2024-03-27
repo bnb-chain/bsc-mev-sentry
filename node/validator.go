@@ -3,18 +3,24 @@ package node
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-co-op/gocron"
 
+	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
+	"github.com/bnb-chain/bsc-mev-sentry/metrics"
 )
 
 var (
@@ -37,16 +43,49 @@ var (
 	}
 )
 
+func NewValidators(cfg []ValidatorConfig) map[string]Validator {
+	validators := make(map[string]Validator)
+	for _, v := range cfg {
+		val := NewValidator(&v)
+		if val != nil {
+			validators[v.PublicHostName] = val
+		}
+	}
+
+	// remove password file
+	for _, v := range cfg {
+		_, err := os.Lstat(v.PasswordFilePath)
+		if !os.IsNotExist(err) {
+			os.Remove(v.PasswordFilePath)
+		}
+	}
+
+	return validators
+}
+
 type Validator interface {
 	SendBid(context.Context, types.BidArgs) (common.Hash, error)
 	MevRunning() bool
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
 	MevParams(ctx context.Context) (*types.MevParams, error)
+	BidFeeCeil() uint64
+	GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
 }
 
 type ValidatorConfig struct {
 	PrivateURL     string
 	PublicHostName string
+	BidFeeCeil     uint64
+
+	PayAccountMode account.Mode
+	// PrivateKey private key of sentry wallet
+	PrivateKey string
+	// KeystorePath path of keystore
+	KeystorePath string
+	// PasswordFilePath stores keystore password
+	PasswordFilePath string
+	// PayAccountAddress public address of sentry wallet
+	PayAccountAddress string
 }
 
 func NewValidator(config *ValidatorConfig) Validator {
@@ -56,13 +95,24 @@ func NewValidator(config *ValidatorConfig) Validator {
 		return nil
 	}
 
-	v := &validator{
-		cfg:       config,
-		client:    cli,
-		scheduler: gocron.NewScheduler(time.UTC),
+	acc, err := account.New(&account.Config{
+		Mode:             config.PayAccountMode,
+		PrivateKey:       config.PrivateKey,
+		KeystorePath:     config.KeystorePath,
+		PasswordFilePath: config.PasswordFilePath,
+		Address:          config.PayAccountAddress})
+	if err != nil {
+		log.Panicw("failed to create payAccount", "err", err)
 	}
 
-	if _, err := v.scheduler.Every(1).Hours().Do(func() {
+	v := &validator{
+		cfg:        config,
+		client:     cli,
+		scheduler:  gocron.NewScheduler(time.UTC),
+		payAccount: acc,
+	}
+
+	if _, err := v.scheduler.Every(10).Second().Do(func() {
 		v.refresh()
 	}); err != nil {
 		log.Debugw("error while setting up scheduler", "err", err)
@@ -74,11 +124,14 @@ func NewValidator(config *ValidatorConfig) Validator {
 }
 
 type validator struct {
-	cfg    *ValidatorConfig
-	client *ethclient.Client
+	cfg        *ValidatorConfig
+	client     *ethclient.Client
+	payAccount account.Account
 
-	scheduler  *gocron.Scheduler
-	mevRunning bool
+	scheduler         *gocron.Scheduler
+	mevRunning        uint32
+	payAccountBalance uint64
+	payAccountNonce   uint64
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
@@ -86,16 +139,39 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 }
 
 func (n *validator) MevRunning() bool {
-	return n.mevRunning
+	return atomic.LoadUint32(&n.mevRunning) == 1
 }
 
 func (n *validator) refresh() {
 	mevRunning, err := n.client.MevRunning(context.Background())
 	if err != nil {
-		log.Errorw("failed to fetch mev running status", "err", err)
+		metrics.ChainError.Inc()
+		log.Errorw("failed to fetch mev running status", "url", n.cfg.PrivateURL, "err", err)
 	}
 
-	n.mevRunning = mevRunning
+	if mevRunning {
+		atomic.StoreUint32(&n.mevRunning, 1)
+	} else {
+		atomic.StoreUint32(&n.mevRunning, 0)
+	}
+
+	balance, err := n.client.BalanceAt(context.Background(), n.payAccount.Address(), nil)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to fetch validator payAccount balance", "err", err)
+	}
+
+	if balance != nil {
+		atomic.StoreUint64(&n.payAccountBalance, balance.Uint64())
+	}
+
+	nonce, err := n.client.PendingNonceAt(context.Background(), n.payAccount.Address())
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
+	}
+
+	atomic.StoreUint64(&n.payAccountNonce, nonce)
 }
 
 func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error) {
@@ -104,4 +180,46 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 
 func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
 	return n.client.MevParams(ctx)
+}
+
+func (n *validator) BidFeeCeil() uint64 {
+	return n.cfg.BidFeeCeil
+}
+
+func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
+	// take pay bid tx as block tag
+	var amount = big.NewInt(0)
+
+	if builderFee != nil {
+		amount = builderFee
+	}
+
+	if atomic.LoadUint64(&n.payAccountBalance) < amount.Uint64() {
+		metrics.AccountError.WithLabelValues(n.payAccount.Address().String(), "insufficient_balance").Inc()
+		log.Errorw("insufficient balance", "balance", atomic.LoadUint64(&n.payAccountBalance),
+			"builderFee", builderFee.Uint64())
+		return nil, errors.New("insufficient balance")
+	}
+
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    atomic.LoadUint64(&n.payAccountNonce),
+		GasPrice: big.NewInt(0),
+		Gas:      25000,
+		To:       &builder,
+		Value:    amount,
+	})
+
+	signedTx, err := n.payAccount.SignTx(tx, amount)
+	if err != nil {
+		log.Errorw("failed to sign pay bid tx", "err", err)
+		return nil, err
+	}
+
+	payBidTx, err := signedTx.MarshalBinary()
+	if err != nil {
+		log.Errorw("failed to marshal pay bid tx", "err", err)
+		return nil, err
+	}
+
+	return payBidTx, nil
 }

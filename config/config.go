@@ -9,17 +9,14 @@ import (
 
 	"github.com/naoina/toml"
 
-	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
 )
 
 type Config struct {
 	Service    service.Config
-	Account    account.Config
 	Validators []node.ValidatorConfig
 	Builders   []node.BuilderConfig
-	FullNode   node.FullNodeConfig
 
 	Debug DebugConfig
 	Log   LogConfig
