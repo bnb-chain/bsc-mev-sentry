@@ -41,15 +41,16 @@ func main() {
 
 	validators := make(map[string]node.Validator)
 	for _, v := range cfg.Validators {
-		validator := node.NewValidator(&v)
+		validator := node.NewValidator(v)
 		if validator != nil {
+			log.Infow("v", "validator", validator)
 			validators[v.PublicHostName] = validator
 		}
 	}
 
 	builders := make(map[common.Address]node.Builder)
 	for _, b := range cfg.Builders {
-		builder := node.NewBuilder(&b)
+		builder := node.NewBuilder(b)
 		if builder != nil {
 			builders[b.Address] = builder
 		}

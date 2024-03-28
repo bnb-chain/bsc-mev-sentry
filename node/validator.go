@@ -66,7 +66,7 @@ type ValidatorConfig struct {
 	PayAccountAddress string
 }
 
-func NewValidator(config *ValidatorConfig) Validator {
+func NewValidator(config ValidatorConfig) Validator {
 	cli, err := ethclient.DialOptions(context.Background(), config.PrivateURL, rpc.WithHTTPClient(client))
 	if err != nil {
 		log.Errorw("failed to dial validator", "url", config.PrivateURL, "err", err)
@@ -102,7 +102,7 @@ func NewValidator(config *ValidatorConfig) Validator {
 }
 
 type validator struct {
-	cfg     *ValidatorConfig
+	cfg     ValidatorConfig
 	client  *ethclient.Client
 	account account.Account
 
@@ -149,16 +149,15 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 }
 
 func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
-	params, err := n.client.MevParams(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Infow("validator return mev param", "params", params.BidFeeCeil)
-	params.BidFeeCeil = n.cfg.BidFeeCeil
+	//params, err := n.client.MevParams(ctx)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//log.Infow("validator return mev param", "params", params.BidFeeCeil)
+	//params.BidFeeCeil = n.cfg.BidFeeCeil
 	log.Infow("return mev param", "params", n.cfg.BidFeeCeil)
 
-	return params, nil
+	return &types.MevParams{BidFeeCeil: n.cfg.BidFeeCeil}, nil
 }
 
 func (n *validator) BidFeeCeil() uint64 {
