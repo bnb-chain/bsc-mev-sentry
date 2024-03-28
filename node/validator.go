@@ -149,15 +149,14 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 }
 
 func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
-	//params, err := n.client.MevParams(ctx)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//log.Infow("validator return mev param", "params", params.BidFeeCeil)
-	//params.BidFeeCeil = n.cfg.BidFeeCeil
-	log.Infow("return mev param", "params", n.cfg.BidFeeCeil)
+	params, err := n.client.MevParams(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	return &types.MevParams{BidFeeCeil: n.cfg.BidFeeCeil}, nil
+	params.BidFeeCeil = n.cfg.BidFeeCeil
+
+	return params, nil
 }
 
 func (n *validator) BidFeeCeil() uint64 {
