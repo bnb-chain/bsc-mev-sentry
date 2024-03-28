@@ -149,14 +149,23 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 }
 
 func (n *validator) MevParams(ctx context.Context) (*types.MevParams, error) {
-	return n.client.MevParams(ctx)
+	params, err := n.client.MevParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infow("validator return mev param", "params", params.BidFeeCeil)
+	params.BidFeeCeil = n.cfg.BidFeeCeil
+	log.Infow("return mev param", "params", n.cfg.BidFeeCeil)
+
+	return params, nil
 }
 
 func (n *validator) BidFeeCeil() uint64 {
 	return n.cfg.BidFeeCeil
 }
 
-func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
+func (n *validator) GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
 	// take pay bid tx as block tag
 	var (
 		amount  = big.NewInt(0)
@@ -182,7 +191,13 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 		Value:    amount,
 	})
 
-	signedTx, err := n.account.SignTx(tx, amount)
+	chainID, err := n.client.ChainID(ctx)
+	if err != nil {
+		log.Errorw("failed to fetch chain id", "err", err)
+		return nil, err
+	}
+
+	signedTx, err := n.account.SignTx(tx, chainID)
 	if err != nil {
 		log.Errorw("failed to sign pay bid tx", "err", err)
 		return nil, err

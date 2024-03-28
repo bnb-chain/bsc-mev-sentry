@@ -121,6 +121,8 @@ func (k *keystoreAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*type
 		return nil, err
 	}
 
+	log.Infow("pay bid tx signed", "tx", signedTx.Hash().Hex())
+
 	return signedTx, nil
 }
 
@@ -149,11 +151,13 @@ func newPrivateKeyAccount(privateKey string) (*privateKeyAccount, error) {
 }
 
 func (p *privateKeyAccount) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
-	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), p.key)
+	signedTx, err := types.SignTx(tx, types.NewLondonSigner(chainID), p.key)
 	if err != nil {
 		log.Errorw("failed to sign tx", "err", err)
 		return nil, err
 	}
+
+	log.Infow("pay bid tx signed", "tx", signedTx.Hash().Hex())
 
 	return signedTx, nil
 }

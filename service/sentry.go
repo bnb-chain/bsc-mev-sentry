@@ -96,6 +96,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	}
 
 	args.PayBidTx = payBidTx
+	args.PayBidTxGasUsed = 25000
 
 	return validator.SendBid(ctx, args)
 }
