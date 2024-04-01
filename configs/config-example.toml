@@ -1,28 +1,24 @@
 [Service]
-HTTPListenAddr = "localhost:3000"
-RPCConcurrency = 10
-RPCTimeout = "10s"
-
-[Account]
-Mode = "keystore"
-KeystorePath = "./keystore"
-Password = "sentry"
-Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
+HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
+RPCConcurrency = 100 # The maximum number of concurrent requests.
+RPCTimeout = "10s" # The timeout for RPC requests.
 
 [[Validators]]
-PrivateURL = "http://127.0.0.1:8546"
-PublicHostName = "127.0.0.1"
+PrivateURL = "http://10.200.31.36:8545"
+PublicHostName = "bsc-testnet-elbrus.bnbchain.org"
+PayAccountMode = "privateKey"
+PrivateKey = "b1fed931ad503ba9d029e86c2bd957cccbeb54f5995441f34796ddbee68a53cf"
+
+[[Validators]]
+PrivateURL = "http://10.200.33.92:8545"
+PublicHostName = "bsc-testnet-ararat.bnbchain.org"
+PayAccountMode = "privateKey"
+PrivateKey = "ce3f1b7573842f80764ec12573a049612bc49c8f940c00fb71d755f66f647503"
 
 [[Builders]]
-Address = "0x837060bd423eFcDd5B7b6B92aB3CFc74B9CD0df4"
-URL = "http://localhost:8555"
+Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5" # The address of the builder.
+URL = "http://bsc-builder-1" # The public URL of the builder.
 
-[FullNode]
-URL = "http://localhost:8545"
-
-[Debug]
-ListenAddr = "localhost:8090"
-
-[Log]
-RootDir = "./logs"
-Level = "debug"
+[[Builders]]
+Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5"
+URL = "http://bsc-builder-2"

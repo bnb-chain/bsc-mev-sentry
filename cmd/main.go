@@ -12,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/bnb-chain/bsc-mev-sentry/account"
 	"github.com/bnb-chain/bsc-mev-sentry/config"
 	ginutils "github.com/bnb-chain/bsc-mev-sentry/gin"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
@@ -40,14 +39,9 @@ func main() {
 
 	log.Infow("bsc mev-sentry start", "configPath", *configPath, "config", cfg)
 
-	acc, err := account.New(&cfg.Account)
-	if err != nil {
-		log.Panicw("failed to create account", "err", err)
-	}
-
 	validators := make(map[string]node.Validator)
 	for _, v := range cfg.Validators {
-		validator := node.NewValidator(&v)
+		validator := node.NewValidator(v)
 		if validator != nil {
 			validators[v.PublicHostName] = validator
 		}
@@ -55,17 +49,15 @@ func main() {
 
 	builders := make(map[common.Address]node.Builder)
 	for _, b := range cfg.Builders {
-		builder := node.NewBuilder(&b)
+		builder := node.NewBuilder(b)
 		if builder != nil {
 			builders[b.Address] = builder
 		}
 	}
 
-	fullNode := node.NewFullNode(&cfg.FullNode)
-
 	rpcServer := rpc.NewServer()
-	sentryService := service.NewMevSentry(&cfg.Service, acc, validators, builders, fullNode)
-	if err = rpcServer.RegisterName("mev", sentryService); err != nil {
+	sentryService := service.NewMevSentry(&cfg.Service, validators, builders)
+	if err := rpcServer.RegisterName("mev", sentryService); err != nil {
 		panic(err)
 	}
 
@@ -78,7 +70,7 @@ func main() {
 
 	app.POST("/", gin.WrapH(rpcServer))
 
-	if err = app.Run(cfg.Service.HTTPListenAddr); err != nil {
+	if err := app.Run(cfg.Service.HTTPListenAddr); err != nil {
 		log.Errorf("fail to run rpc server, err:%v", err)
 	}
 }

@@ -20,7 +20,7 @@ type BuilderConfig struct {
 	URL     string
 }
 
-func NewBuilder(config *BuilderConfig) Builder {
+func NewBuilder(config BuilderConfig) Builder {
 	cli, err := builderclient.DialOptions(context.Background(), config.URL, rpc.WithHTTPClient(client))
 	if err != nil {
 		log.Errorw("failed to dial builder", "url", config.URL, "err", err)
@@ -34,7 +34,7 @@ func NewBuilder(config *BuilderConfig) Builder {
 }
 
 type builder struct {
-	cfg    *BuilderConfig
+	cfg    BuilderConfig
 	client *builderclient.Client
 }
 
