@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	PayBidTxGasUsed = uint64(25000)
+
 	dialer = &net.Dialer{
 		Timeout:   time.Second,
 		KeepAlive: 60 * time.Second,
@@ -107,6 +109,7 @@ type validator struct {
 	payAccount account.Account
 
 	scheduler         *gocron.Scheduler
+	chainID           atomic.Pointer[big.Int]
 	mevRunning        uint32
 	mevParams         atomic.Pointer[types.MevParams]
 	payAccountBalance atomic.Pointer[big.Int]
@@ -122,6 +125,16 @@ func (n *validator) MevRunning() bool {
 }
 
 func (n *validator) refresh() {
+	chainID, err := n.client.ChainID(context.Background())
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to fetch chainID", "url", n.cfg.PrivateURL, "err", err)
+	}
+
+	if chainID != nil {
+		n.chainID.Store(chainID)
+	}
+
 	mevRunning, err := n.client.MevRunning(context.Background())
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -200,12 +213,12 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 	tx := types.NewTx(&types.LegacyTx{
 		Nonce:    atomic.LoadUint64(&n.payAccountNonce),
 		GasPrice: big.NewInt(0),
-		Gas:      25000,
+		Gas:      PayBidTxGasUsed,
 		To:       &builder,
 		Value:    amount,
 	})
 
-	signedTx, err := n.payAccount.SignTx(tx, amount)
+	signedTx, err := n.payAccount.SignTx(tx, n.chainID.Load())
 	if err != nil {
 		log.Errorw("failed to sign pay bid tx", "err", err)
 		return nil, err

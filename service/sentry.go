@@ -75,10 +75,12 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 
 	bidFeeCeil := validator.BuilderFeeCeil()
 
-	if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
-		log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
-		err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
-		return
+	if args.RawBid.BuilderFee != nil && bidFeeCeil != nil {
+		if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
+			log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
+			err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
+			return
+		}
 	}
 
 	builder, err := args.EcrecoverSender()
@@ -96,6 +98,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	}
 
 	args.PayBidTx = payBidTx
+	args.PayBidTxGasUsed = node.PayBidTxGasUsed
 
 	return validator.SendBid(ctx, args)
 }

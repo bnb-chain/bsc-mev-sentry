@@ -3,7 +3,6 @@ package middlewares
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -12,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/bnb-chain/bsc-mev-sentry/log"
 )
 
 var (
@@ -49,9 +50,9 @@ func PanicRecovery() gin.HandlerFunc {
 				}
 				headersToStr := strings.Join(headers, "\r\n")
 				if brokenPipe {
-					log.Println("broken pipe", "err", err, "headers", headersToStr)
+					log.Errorw("broken pipe", "err", err, "headers", headersToStr)
 				} else {
-					log.Println("panic recovered", "err", err, "headers", headersToStr, "stack", stack)
+					log.Errorw("panic recovered", "err", err, "headers", headersToStr, "stack", stack)
 				}
 
 				if brokenPipe {
