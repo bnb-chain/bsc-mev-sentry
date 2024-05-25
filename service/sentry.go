@@ -88,6 +88,10 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
+	} else if _, ok = s.builders[builder]; !ok {
+		log.Errorw("builder not registered", "address", builder)
+		err = types.NewInvalidBidError("builder not registered")
+		return
 	}
 
 	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
