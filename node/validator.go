@@ -26,7 +26,7 @@ var (
 	PayBidTxGasUsed = uint64(25000)
 
 	dialer = &net.Dialer{
-		Timeout:   time.Second,
+		Timeout:   5 * time.Second,
 		KeepAlive: 60 * time.Second,
 	}
 
