@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -26,7 +27,7 @@ var (
 	PayBidTxGasUsed = uint64(25000)
 
 	dialer = &net.Dialer{
-		Timeout:   time.Second,
+		Timeout:   5 * time.Second,
 		KeepAlive: 60 * time.Second,
 	}
 
@@ -117,7 +118,17 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
-	return n.client.SendBid(ctx, args)
+	hash, err := n.client.SendBid(ctx, args)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to send bid", "err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when send bid to validator")
+		}
+	}
+
+	return hash, err
 }
 
 func (n *validator) MevRunning() bool {

@@ -88,6 +88,10 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
+	} else if _, ok = s.builders[builder]; !ok {
+		log.Errorw("builder not registered", "address", builder)
+		err = types.NewInvalidBidError("builder not registered")
+		return
 	}
 
 	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
@@ -208,7 +212,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 
 	builder, ok = s.builders[issue.Builder]
 	if !ok {
-		log.Errorw("builder not found", "address", issue.Builder)
+		log.Errorw("builder url not found", "address", issue.Builder, "issue", issue)
 		err = errors.New("builder not found")
 		return
 	}
