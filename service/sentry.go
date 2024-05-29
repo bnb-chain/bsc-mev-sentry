@@ -212,7 +212,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 
 	builder, ok = s.builders[issue.Builder]
 	if !ok {
-		log.Errorw("builder not found", "address", issue.Builder)
+		log.Errorw("builder url not found", "address", issue.Builder, "issue", issue)
 		err = errors.New("builder not found")
 		return
 	}
