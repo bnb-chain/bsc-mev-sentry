@@ -126,7 +126,6 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 		if strings.Contains(err.Error(), "timeout") {
 			err = errors.New("timeout when send bid to validator")
 		}
-
 	}
 
 	return hash, err
