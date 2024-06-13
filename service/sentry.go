@@ -170,7 +170,6 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 	start := time.Now()
 	defer recordLatency(method, start)
 	defer timeoutCancel(&ctx, s.timeout)()
-	defer timeoutCancel(&ctx, s.timeout)()
 	defer func() {
 		if err != nil {
 			if rpcErr, ok := err.(rpc.Error); ok {
@@ -192,6 +191,34 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 	}
 
 	return validator.MevRunning(), nil
+}
+
+func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (has bool, err error) {
+	method := "mev_hasBuilder"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
+
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		err = types.NewInvalidBidError("validator hostname not found")
+		return
+	}
+
+	return validator.HasBuilder(ctx, builder)
 }
 
 func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err error) {
