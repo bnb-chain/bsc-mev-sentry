@@ -23,8 +23,8 @@ For the details of mev_params, here are some notices:
 1. `make build`
 2. `.build/sentry -config ./configs/config.toml`
 
-❗❗❗This is an important security notice: Please do not configure validators' private key here. 
-Please configure entirely new accounts as pay bid accounts.
+❗❗❗This is an important security notice: Please do not configure any validator's private key here. 
+Please create entirely new accounts as pay bid accounts.
 
 config-example.toml:
 ```
