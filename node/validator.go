@@ -48,6 +48,7 @@ var (
 type Validator interface {
 	SendBid(context.Context, types.BidArgs) (common.Hash, error)
 	MevRunning() bool
+	HasBuilder(ctx context.Context, builder common.Address) (bool, error)
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
 	MevParams(ctx context.Context) (*types.MevParams, error)
 	BuilderFeeCeil() *big.Int
@@ -133,6 +134,20 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 
 func (n *validator) MevRunning() bool {
 	return atomic.LoadUint32(&n.mevRunning) == 1
+}
+
+func (n *validator) HasBuilder(ctx context.Context, builder common.Address) (bool, error) {
+	has, err := n.client.HasBuilder(ctx, builder)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to check if has builder", "err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when check if has builder")
+		}
+	}
+
+	return has, err
 }
 
 func (n *validator) refresh() {
