@@ -23,8 +23,12 @@ For the details of mev_params, here are some notices:
 1. `make build`
 2. `.build/sentry -config ./configs/config.toml`
 
-Sentry settings are configured in the `config.toml` file. The following is an example of a `config.toml` file:
+Sentry settings are configured in the `config.toml` file.
 
+❗This is an important security notice: Please do not configure validators' private key here. 
+Please configure entirely new accounts as pay bid accounts.
+
+config-example.toml:
 ```
 [Service]
 HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
