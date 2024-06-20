@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"unicode"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/naoina/toml"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
@@ -37,6 +38,24 @@ func Load(file string) *Config {
 		panic(err)
 	}
 	return &cfg
+}
+
+func (c *Config) HidePrivateKey() (*Config, error) {
+	origJSON, err := jsoniter.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+
+	clone := Config{}
+	if err = jsoniter.Unmarshal(origJSON, &clone); err != nil {
+		return nil, err
+	}
+
+	for i, _ := range clone.Validators {
+		clone.Validators[i].SentryPrivateKey = ""
+	}
+
+	return &clone, nil
 }
 
 // TomlSettings - These settings ensure that TOML keys use the same names as Go struct fields.

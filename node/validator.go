@@ -58,15 +58,15 @@ type ValidatorConfig struct {
 	PrivateURL     string
 	PublicHostName string
 
-	PayAccountMode account.Mode
-	// PrivateKey private key of sentry wallet
-	PrivateKey string
-	// KeystorePath path of keystore
-	KeystorePath string
-	// PasswordFilePath stores keystore password
-	PasswordFilePath string
-	// PayAccountAddress public address of sentry wallet
-	PayAccountAddress string
+	SentryAccountMode account.Mode
+	// SentryPrivateKey private key of sentry wallet
+	SentryPrivateKey string
+	// SentryKeystorePath path of sentry keystore
+	SentryKeystorePath string
+	// SentryPasswordFilePath stores sentry keystore password
+	SentryPasswordFilePath string
+	// SentryAddress public address of sentry wallet
+	SentryAddress string
 }
 
 func NewValidator(config ValidatorConfig) Validator {
@@ -77,11 +77,11 @@ func NewValidator(config ValidatorConfig) Validator {
 	}
 
 	acc, err := account.New(&account.Config{
-		Mode:             config.PayAccountMode,
-		PrivateKey:       config.PrivateKey,
-		KeystorePath:     config.KeystorePath,
-		PasswordFilePath: config.PasswordFilePath,
-		Address:          config.PayAccountAddress})
+		Mode:             config.SentryAccountMode,
+		PrivateKey:       config.SentryPrivateKey,
+		KeystorePath:     config.SentryKeystorePath,
+		PasswordFilePath: config.SentryPasswordFilePath,
+		Address:          config.SentryAddress})
 	if err != nil {
 		log.Panicw("failed to create payAccount", "err", err)
 	}
