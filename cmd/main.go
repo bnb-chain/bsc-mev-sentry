@@ -37,7 +37,8 @@ func main() {
 
 	openPrometheusAndPprof(cfg.Debug.ListenAddr)
 
-	log.Infow("bsc mev-sentry start", "configPath", *configPath, "config", cfg)
+	log.Infow("bsc mev-sentry start", "configPath", *configPath,
+		"validator_count", len(cfg.Validators), "builder_count", len(cfg.Builders))
 
 	validators := make(map[string]node.Validator)
 	for _, v := range cfg.Validators {
