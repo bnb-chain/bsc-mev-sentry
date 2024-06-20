@@ -25,7 +25,7 @@ For the details of mev_params, here are some notices:
 
 Sentry settings are configured in the `config.toml` file.
 
-❗This is an important security notice: Please do not configure validators' private key here. 
+❗❗❗This is an important security notice: Please do not configure validators' private key here. 
 Please configure entirely new accounts as pay bid accounts.
 
 config-example.toml:
