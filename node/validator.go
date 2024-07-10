@@ -183,11 +183,13 @@ func (n *validator) refresh() {
 		n.payAccountBalance.Store(balance)
 	}
 
-	nonce, err := n.client.PendingNonceAt(context.Background(), n.payAccount.Address())
+	nonce, err := n.client.NonceAt(context.Background(), n.payAccount.Address(), nil)
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
 	}
+
+	log.Infow("refresh payAccount nonce", "address", n.payAccount.Address(), "nonce", nonce)
 
 	atomic.StoreUint64(&n.payAccountNonce, nonce)
 
