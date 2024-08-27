@@ -94,7 +94,7 @@ func NewValidator(config ValidatorConfig) Validator {
 		payAccount: acc,
 	}
 
-	if _, err := v.scheduler.Every(10).Second().Do(func() {
+	if _, err := v.scheduler.Every(500).Milliseconds().Do(func() {
 		v.refresh()
 	}); err != nil {
 		log.Debugw("error while setting up scheduler", "err", err)
