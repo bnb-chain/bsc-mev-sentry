@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	PayBidTxGasUsed = uint64(25000)
+	PayBidTxGasUsed = uint64(75000)
 
 	dialer = &net.Dialer{
 		Timeout:   5 * time.Second,
