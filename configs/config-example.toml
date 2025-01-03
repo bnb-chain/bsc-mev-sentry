@@ -1,13 +1,19 @@
 [Service]
-HTTPListenAddr = "0.0.0.0:8555" # The address to listen on for HTTP requests.
+HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
 RPCConcurrency = 100 # The maximum number of concurrent requests.
 RPCTimeout = "10s" # The timeout for RPC requests.
 
 [[Validators]]
-PrivateURL = "http://127.0.0.1:8545"
-PublicHostName = "127.0.0.1"
+PrivateURL = "http://10.200.31.36:8545"
+PublicHostName = "bsc-testnet-elbrus.bnbchain.org"
 PayAccountMode = "privateKey"
 PrivateKey = "b1fed931ad50...34796ddbee68a53cf"
+
+[[Validators]]
+PrivateURL = "http://10.200.33.92:8545"
+PublicHostName = "bsc-testnet-ararat.bnbchain.org"
+PayAccountMode = "privateKey"
+PrivateKey = "ce3f1b757384...755f66f647503"
 
 [[Builders]]
 Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5" # The address of the builder.
