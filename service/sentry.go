@@ -94,7 +94,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		return
 	}
 
-	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
+	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee, uint16(len(args.RawBid.Txs)))
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
