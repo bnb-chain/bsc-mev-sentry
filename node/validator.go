@@ -52,7 +52,7 @@ type Validator interface {
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
 	MevParams(ctx context.Context) (*types.MevParams, error)
 	BuilderFeeCeil() *big.Int
-	GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int, bidTxSize uint16) (hexutil.Bytes, error)
+	GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
 }
 
 type ValidatorConfig struct {
@@ -223,7 +223,7 @@ func (n *validator) BuilderFeeCeil() *big.Int {
 	return big.NewInt(0)
 }
 
-func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, builderFee *big.Int, bidTxSize uint16) (hexutil.Bytes, error) {
+func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
 	// take pay bid tx as block tag
 	var amount = big.NewInt(0)
 
@@ -244,7 +244,6 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 		Gas:      PayBidTxGasUsed,
 		To:       &builder,
 		Value:    amount,
-		Data:     []byte{byte(bidTxSize >> 8), byte(bidTxSize % 256)},
 	})
 
 	signedTx, err := n.payAccount.SignTx(tx, n.chainID.Load())
