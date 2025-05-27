@@ -94,7 +94,7 @@ func NewValidator(config ValidatorConfig) Validator {
 		payAccount: acc,
 	}
 
-	if _, err := v.scheduler.Every(500).Milliseconds().Do(func() {
+	if _, err := v.scheduler.Every(10).Second().Do(func() {
 		v.refresh()
 	}); err != nil {
 		log.Debugw("error while setting up scheduler", "err", err)
@@ -115,7 +115,6 @@ type validator struct {
 	mevRunning        uint32
 	mevParams         atomic.Pointer[types.MevParams]
 	payAccountBalance atomic.Pointer[big.Int]
-	payAccountNonce   uint64
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
@@ -183,16 +182,6 @@ func (n *validator) refresh() {
 		n.payAccountBalance.Store(balance)
 	}
 
-	nonce, err := n.client.NonceAt(context.Background(), n.payAccount.Address(), nil)
-	if err != nil {
-		metrics.ChainError.Inc()
-		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
-	}
-
-	log.Infow("refresh payAccount nonce", "address", n.payAccount.Address(), "nonce", nonce)
-
-	atomic.StoreUint64(&n.payAccountNonce, nonce)
-
 	params, err := n.client.MevParams(context.Background())
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -238,8 +227,15 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 		return nil, errors.New("insufficient balance")
 	}
 
+	nonce, err := n.client.NonceAt(context.Background(), n.payAccount.Address(), nil)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
+	}
+	log.Debugw("get payAccount nonce", "address", n.payAccount.Address(), "nonce", nonce)
+
 	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    atomic.LoadUint64(&n.payAccountNonce),
+		Nonce:    nonce,
 		GasPrice: big.NewInt(0),
 		Gas:      PayBidTxGasUsed,
 		To:       &builder,
