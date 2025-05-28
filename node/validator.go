@@ -231,6 +231,7 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
+		return nil, err
 	}
 	log.Debugw("get payAccount nonce", "address", n.payAccount.Address(), "nonce", nonce)
 
