@@ -61,6 +61,18 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		}
 	}()
 
+	builder, err := args.EcrecoverSender()
+	if err != nil {
+		log.Errorw("failed to parse bid signature", "err", err)
+		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		return
+	} else if _, ok := s.builders[builder]; !ok {
+		log.Errorw("builder not registered", "address", builder)
+		err = types.NewInvalidBidError("builder not registered")
+		return
+	}
+	log.Debugw("[BID RECEIVED]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
+
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
 		hostname = hostname[:strings.Index(hostname, ":")]
@@ -83,28 +95,20 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		}
 	}
 
-	builder, err := args.EcrecoverSender()
-	if err != nil {
-		log.Errorw("failed to parse bid signature", "err", err)
-		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
-		return
-	} else if _, ok = s.builders[builder]; !ok {
-		log.Errorw("builder not registered", "address", builder)
-		err = types.NewInvalidBidError("builder not registered")
-		return
-	}
-
-	payBidTx, err := validator.GeneratePayBidTx(ctx, builder, args.RawBid.BuilderFee)
+	gstart := time.Now()
+	payBidTx, err := validator.GeneratePayBidTx(ctx, args, builder, args.RawBid.BuilderFee)
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
 		return
 	}
+	log.Debugw("GeneratePayBidTx", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", time.Since(gstart).Milliseconds())
 
 	args.PayBidTx = payBidTx
 	args.PayBidTxGasUsed = node.PayBidTxGasUsed
 
-	return validator.SendBid(ctx, args)
+	log.Debugw("[BID SENT]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
+	return validator.SendBid(ctx, args, builder)
 }
 
 func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {

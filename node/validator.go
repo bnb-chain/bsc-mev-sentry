@@ -46,13 +46,13 @@ var (
 )
 
 type Validator interface {
-	SendBid(context.Context, types.BidArgs) (common.Hash, error)
+	SendBid(context.Context, types.BidArgs, common.Address) (common.Hash, error)
 	MevRunning() bool
 	HasBuilder(ctx context.Context, builder common.Address) (bool, error)
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
 	MevParams(ctx context.Context) (*types.MevParams, error)
 	BuilderFeeCeil() *big.Int
-	GeneratePayBidTx(ctx context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
+	GeneratePayBidTx(ctx context.Context, args types.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
 }
 
 type ValidatorConfig struct {
@@ -117,7 +117,7 @@ type validator struct {
 	payAccountBalance atomic.Pointer[big.Int]
 }
 
-func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Hash, error) {
+func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder common.Address) (common.Hash, error) {
 	hash, err := n.client.SendBid(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -127,6 +127,7 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs) (common.Has
 			err = errors.New("timeout when send bid to validator")
 		}
 	}
+	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
 	return hash, err
 }
@@ -212,7 +213,7 @@ func (n *validator) BuilderFeeCeil() *big.Int {
 	return big.NewInt(0)
 }
 
-func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
+func (n *validator) GeneratePayBidTx(_ context.Context, args types.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
 	// take pay bid tx as block tag
 	var amount = big.NewInt(0)
 
@@ -227,13 +228,14 @@ func (n *validator) GeneratePayBidTx(_ context.Context, builder common.Address, 
 		return nil, errors.New("insufficient balance")
 	}
 
+	start := time.Now()
 	nonce, err := n.client.NonceAt(context.Background(), n.payAccount.Address(), nil)
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to fetch validator payAccount nonce", "err", err)
 		return nil, err
 	}
-	log.Debugw("get payAccount nonce", "address", n.payAccount.Address(), "nonce", nonce)
+	log.Debugw("Get payAccount nonce", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", time.Since(start).Milliseconds())
 
 	tx := types.NewTx(&types.LegacyTx{
 		Nonce:    nonce,
