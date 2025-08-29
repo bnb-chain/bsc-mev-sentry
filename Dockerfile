@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/golang:1.23-alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.24-alpine AS builder
 
 ENV GO111MODULE=on \
     CGO_ENABLED=1 \
