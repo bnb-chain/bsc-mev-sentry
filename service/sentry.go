@@ -48,13 +48,13 @@ func NewMevSentry(cfg *Config,
 	return s
 }
 
-// Override the BidArgs type to add validator host name
-type BidArgs struct {
+// BidArgsWrapper Override the BidArgs type to add validator host name
+type BidArgsWrapper struct {
 	types.BidArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
 }
 
-func (s *MevSentry) SendBid(ctx context.Context, args BidArgs) (bidHash common.Hash, err error) {
+func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash common.Hash, err error) {
 	method := "mev_sendBid"
 	start := time.Now()
 	defer recordLatency(method, start)
