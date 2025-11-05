@@ -85,7 +85,10 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgs) (bidHash common.H
 	}
 
 	if args.ValidatorHostName != "" {
+		log.Debugw("hostname override", "from", hostname, "to", args.ValidatorHostName)
 		hostname = args.ValidatorHostName
+	} else {
+		log.Debugw("hostname from context", "hostname", hostname)
 	}
 
 	validator, ok := s.validators[hostname]
