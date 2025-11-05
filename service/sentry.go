@@ -48,7 +48,13 @@ func NewMevSentry(cfg *Config,
 	return s
 }
 
-func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash common.Hash, err error) {
+// Override the BidArgs type to add validator host name
+type BidArgs struct {
+	types.BidArgs
+	ValidatorHostName string `json:"validatorHostName,omitempty"`
+}
+
+func (s *MevSentry) SendBid(ctx context.Context, args BidArgs) (bidHash common.Hash, err error) {
 	method := "mev_sendBid"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -78,6 +84,10 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 		hostname = hostname[:strings.Index(hostname, ":")]
 	}
 
+	if args.ValidatorHostName != "" {
+		hostname = args.ValidatorHostName
+	}
+
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
@@ -96,7 +106,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	}
 
 	gstart := time.Now()
-	payBidTx, err := validator.GeneratePayBidTx(ctx, args, builder, args.RawBid.BuilderFee)
+	payBidTx, err := validator.GeneratePayBidTx(ctx, args.BidArgs, builder, args.RawBid.BuilderFee)
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
@@ -108,7 +118,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args types.BidArgs) (bidHash co
 	args.PayBidTxGasUsed = node.PayBidTxGasUsed
 
 	log.Debugw("[BID SENT]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
-	return validator.SendBid(ctx, args, builder)
+	return validator.SendBid(ctx, args.BidArgs, builder)
 }
 
 func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {
