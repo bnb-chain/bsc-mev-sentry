@@ -78,7 +78,11 @@ func main() {
 
 func initLogger(cfg *config.LogConfig) {
 	lvl, _ := log.ParseLevel(cfg.Level)
-	log.Init(lvl, log.StandardizePath(cfg.RootDir, serviceName))
+	var path string
+	if cfg.RootDir != "" {
+		path = log.StandardizePath(cfg.RootDir, serviceName)
+	}
+	log.Init(lvl, path)
 }
 
 func openPrometheusAndPprof(addr string) {

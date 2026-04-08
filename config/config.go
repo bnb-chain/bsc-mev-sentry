@@ -71,7 +71,7 @@ var defaultConfig = Config{
 		ListenAddr: ":6060",
 	},
 	Log: LogConfig{
-		RootDir: "./logs",
+		RootDir: "",
 		Level:   "debug",
 	},
 }
