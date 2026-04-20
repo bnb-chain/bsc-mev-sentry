@@ -11,6 +11,9 @@ import (
 // the returned path is consistent and unified.
 // The path after decoration will be `<root>/<node_ip>/<local_ip>/<service_name>.log`
 func StandardizePath(root, serviceName string) string {
+	if root == "" {
+		return ""
+	}
 	return filepath.Join(root, os.Getenv("NODE_IP"), getLocalIP(), fmt.Sprintf("%s.log", serviceName))
 }
 

@@ -62,8 +62,11 @@ type DebugConfig struct {
 }
 
 type LogConfig struct {
+	// RootDir is the directory for log files.
+	// If empty, logs are written to stderr only.
 	RootDir string
-	Level   string
+
+	Level string
 }
 
 var defaultConfig = Config{
@@ -71,7 +74,7 @@ var defaultConfig = Config{
 		ListenAddr: ":6060",
 	},
 	Log: LogConfig{
-		RootDir: "",
+		RootDir: "./logs",
 		Level:   "debug",
 	},
 }

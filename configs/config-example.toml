@@ -1,3 +1,7 @@
+[Log]
+Level = "info"   # Log level: debug, info, warn, error
+RootDir = "./logs" # Directory for log files. Set to "" to write to stderr only (e.g. for journald).
+
 [Service]
 HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
 RPCConcurrency = 100 # The maximum number of concurrent requests.
