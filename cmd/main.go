@@ -6,11 +6,12 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/cockroachdb/errors"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gin-gonic/contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/bnb-chain/bsc-mev-sentry/config"
 	ginutils "github.com/bnb-chain/bsc-mev-sentry/gin"

@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tredeske/u/ustrings"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/tredeske/u/ustrings"
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/metrics"
