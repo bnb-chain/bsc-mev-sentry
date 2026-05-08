@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/log/internal/types"
 )
@@ -107,4 +109,21 @@ func Test_With(t *testing.T) {
 	log.With("t", 1, "hhh", "xxx", "hhh", "www").Warn("test")
 
 	printLogContent(t)
+}
+
+// Verify that calling Init with an
+// empty path does not create any files or directories.
+// The logger falls back to stderr instead of creating a directory.
+// This behavior lets the process supervisor (e.g. journald) handle log capture.
+func Test_InitWithEmptyPathFallsBackToStderr(t *testing.T) {
+	entriesBefore, err := os.ReadDir(".")
+	assert.NoError(t, err)
+
+	log.Init(types.InfoLevel, "")
+	log.Info("fallback to stderr")
+
+	entriesAfter, err := os.ReadDir(".")
+	assert.NoError(t, err)
+	assert.Equal(t, len(entriesBefore), len(entriesAfter),
+		"Init with empty path must not create any files or directories")
 }
