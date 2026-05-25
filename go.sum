@@ -3600,8 +3600,8 @@ github.com/flosch/pongo2/v4 v4.0.2/go.mod h1:B5ObFANs/36VwxxlgKpdchIJHMvHB562PW+
 github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568/go.mod h1:xEzjJPgXI435gkrCt3MPfRiAkVrwSbHsst4LCFVfpJc=
 github.com/flynn/noise v1.0.0/go.mod h1:xbMo+0i6+IGbYdJhF31t2eR1BIU0CYc12+BNAKwUTag=
 github.com/flynn/noise v1.1.0/go.mod h1:xbMo+0i6+IGbYdJhF31t2eR1BIU0CYc12+BNAKwUTag=
-github.com/flywukong/bsc v0.0.0-20260514034518-156216a84a3f h1:Zwd2Z5XfVbnu0BtV9UWNVRRuknvgr1g4GRI9xvRz4n8=
-github.com/flywukong/bsc v0.0.0-20260514034518-156216a84a3f/go.mod h1:ziZEhm9zYabfgMuHedC+r5E/21nI0n0OEj0tjNm2qNI=
+github.com/flywukong/bsc v0.0.0-20260521114816-450dd56845da h1:P1PBfR1tWDtJeTiScyoy6NyQbXWVZxgT5dGLFS8WLdM=
+github.com/flywukong/bsc v0.0.0-20260521114816-450dd56845da/go.mod h1:ziZEhm9zYabfgMuHedC+r5E/21nI0n0OEj0tjNm2qNI=
 github.com/fogleman/gg v1.2.1-0.20190220221249-0403632d5b90/go.mod h1:R/bRT+9gY/C5z7JzPU0zXsXHKM4/ayA+zqcVNZzPa1k=
 github.com/fogleman/gg v1.3.0/go.mod h1:R/bRT+9gY/C5z7JzPU0zXsXHKM4/ayA+zqcVNZzPa1k=
 github.com/form3tech-oss/jwt-go v3.2.2+incompatible/go.mod h1:pbq4aXjuKjdthFRnoDwaVPLA+WlJuPGy+QneDUgJi2k=
