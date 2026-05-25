@@ -81,22 +81,8 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	}
 	log.Debugw("[BID RECEIVED]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	if args.ValidatorHostName != "" {
-		log.Debugw("hostname override", "from", hostname, "to", args.ValidatorHostName)
-		hostname = args.ValidatorHostName
-	} else {
-		log.Debugw("hostname from context", "hostname", hostname)
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
+	if err != nil {
 		return
 	}
 
@@ -166,22 +152,8 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	}
 	log.Debugw("[BID BLOCK RECEIVED]", "builder", builder)
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	if args.ValidatorHostName != "" {
-		log.Debugw("hostname override", "from", hostname, "to", args.ValidatorHostName)
-		hostname = args.ValidatorHostName
-	} else {
-		log.Debugw("hostname from context", "hostname", hostname)
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
+	if err != nil {
 		return
 	}
 
@@ -202,15 +174,8 @@ func (s *MevSentry) GetBidBlockPermission(ctx context.Context, builder common.Ad
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -230,15 +195,8 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -259,15 +217,8 @@ func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err err
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -288,15 +239,8 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -316,15 +260,8 @@ func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (has
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -362,6 +299,27 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 
 func recordLatency(method string, start time.Time) {
 	metrics.ApiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
+}
+
+func (s *MevSentry) validatorFromRequest(ctx context.Context, override string) (node.Validator, error) {
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	if override != "" {
+		log.Debugw("hostname override", "from", hostname, "to", override)
+		hostname = override
+	} else {
+		log.Debugw("hostname from context", "hostname", hostname)
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		return nil, types.NewInvalidBidError("validator hostname not found")
+	}
+	return validator, nil
 }
 
 func nilCancel() {
