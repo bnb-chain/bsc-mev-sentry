@@ -48,6 +48,8 @@ var (
 
 type Validator interface {
 	SendBid(context.Context, types.BidArgs, common.Address) (common.Hash, error)
+	SendBidBlock(ctx context.Context, args types.BidBlockArgs, builder common.Address) (common.Hash, error)
+	GetBidBlockPermission(ctx context.Context, builder common.Address) (*ethclient.BidBlockPermission, error)
 	MevRunning() bool
 	HasBuilder(ctx context.Context, builder common.Address) (bool, error)
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
@@ -131,6 +133,34 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder com
 	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
 	return hash, err
+}
+
+func (n *validator) SendBidBlock(ctx context.Context, args types.BidBlockArgs, builder common.Address) (common.Hash, error) {
+	hash, err := n.client.SendBidBlock(ctx, args)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to send bid block", "err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when send bid block to validator")
+		}
+	}
+	log.Debugw("[BID BLOCK RESP]", "builder", builder, "hash", hash.TerminalString())
+
+	return hash, err
+}
+
+func (n *validator) GetBidBlockPermission(ctx context.Context, builder common.Address) (*ethclient.BidBlockPermission, error) {
+	result, err := n.client.GetBidBlockPermission(ctx, builder)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to get bid block permission", "err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when get bid block permission from validator")
+		}
+	}
+	return result, err
 }
 
 func (n *validator) MevRunning() bool {
