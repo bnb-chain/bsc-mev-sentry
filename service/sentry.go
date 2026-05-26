@@ -161,7 +161,15 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder)
 }
 
-func (s *MevSentry) GetBidBlockPermission(ctx context.Context, builder common.Address) (result *ethclient.BidBlockPermission, err error) {
+// GetBidBlockPermissionArgs wraps the bare builder address with a validator
+// routing hint, mirroring BidArgsWrapper / BidBlockArgsWrapper for the
+// SendBid / SendBidBlock paths.
+type GetBidBlockPermissionArgs struct {
+	Builder           common.Address `json:"builder"`
+	ValidatorHostName string         `json:"validatorHostName,omitempty"`
+}
+
+func (s *MevSentry) GetBidBlockPermission(ctx context.Context, args GetBidBlockPermissionArgs) (result *ethclient.BidBlockPermission, err error) {
 	method := "mev_getBidBlockPermission"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -174,12 +182,12 @@ func (s *MevSentry) GetBidBlockPermission(ctx context.Context, builder common.Ad
 		}
 	}()
 
-	validator, err := s.validatorFromRequest(ctx, "")
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
 	if err != nil {
 		return
 	}
 
-	return validator.GetBidBlockPermission(ctx, builder)
+	return validator.GetBidBlockPermission(ctx, args.Builder)
 }
 
 func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {
@@ -301,15 +309,19 @@ func recordLatency(method string, start time.Time) {
 	metrics.ApiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
 }
 
-func (s *MevSentry) validatorFromRequest(ctx context.Context, override string) (node.Validator, error) {
+// validatorFromRequest resolves the target validator for an RPC call.
+// validatorHostName, when non-empty, overrides the HTTP Host-based routing —
+// used by SendBid / SendBidBlock so a builder can pick the validator
+// explicitly via the wrapper's ValidatorHostName field. Other RPCs pass "".
+func (s *MevSentry) validatorFromRequest(ctx context.Context, validatorHostName string) (node.Validator, error) {
 	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
 	if strings.Contains(hostname, ":") {
 		hostname = hostname[:strings.Index(hostname, ":")]
 	}
 
-	if override != "" {
-		log.Debugw("hostname override", "from", hostname, "to", override)
-		hostname = override
+	if validatorHostName != "" {
+		log.Debugw("hostname override", "from", hostname, "to", validatorHostName)
+		hostname = validatorHostName
 	} else {
 		log.Debugw("hostname from context", "hostname", hostname)
 	}
