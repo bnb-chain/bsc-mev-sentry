@@ -135,9 +135,9 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
-	if args.BidBlock == nil {
-		log.Errorw("empty bid block")
-		err = types.NewInvalidBidError("empty BidBlock")
+	if args.BidBlock == nil || args.BidBlock.Header == nil {
+		log.Errorw("empty bid block or header")
+		err = types.NewInvalidBidError("empty BidBlock or Header")
 		return
 	}
 	builder, err := args.EcrecoverSender()
@@ -150,14 +150,14 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		err = types.NewInvalidBidError("builder not registered")
 		return
 	}
-	log.Debugw("[BID BLOCK RECEIVED]", "builder", builder)
+	log.Debugw("[BID BLOCK RECEIVED]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", args.BidBlock.Hash().TerminalString())
 
 	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
 	if err != nil {
 		return
 	}
 
-	log.Debugw("[BID BLOCK SENT]", "builder", builder)
+	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", args.BidBlock.Hash().TerminalString())
 	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder)
 }
 
