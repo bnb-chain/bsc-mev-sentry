@@ -139,13 +139,13 @@ func (n *validator) SendBidBlock(ctx context.Context, args types.BidBlockArgs, b
 	hash, err := n.client.SendBidBlock(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
-		log.Errorw("failed to send bid block", "err", err)
+		log.Errorw("failed to send bid block", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", args.BidBlock.Hash().TerminalString(), "err", err)
 
 		if strings.Contains(err.Error(), "timeout") {
 			err = errors.New("timeout when send bid block to validator")
 		}
 	}
-	log.Debugw("[BID BLOCK RESP]", "builder", builder, "hash", hash.TerminalString())
+	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", args.BidBlock.Hash().TerminalString())
 
 	return hash, err
 }
