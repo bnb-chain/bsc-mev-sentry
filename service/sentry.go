@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -54,6 +55,33 @@ func NewMevSentry(cfg *Config,
 type BidArgsWrapper struct {
 	types.BidArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
+
+	// decodeElapsed / payloadBytes are populated by UnmarshalJSON so the
+	// handler can attribute the (otherwise invisible) ingress JSON-decode
+	// cost that the RPC framework pays before SendBid is ever entered.
+	decodeElapsed time.Duration
+	payloadBytes  int
+}
+
+// UnmarshalJSON wraps the default decode so we can measure how long the RPC
+// framework spends turning the request body into a BidArgsWrapper. The body is
+// already in memory at this point, so this times pure CPU (hex/JSON decode),
+// not network.
+func (w *BidArgsWrapper) UnmarshalJSON(input []byte) error {
+	start := time.Now()
+	type plain struct {
+		types.BidArgs
+		ValidatorHostName string `json:"validatorHostName,omitempty"`
+	}
+	var p plain
+	if err := json.Unmarshal(input, &p); err != nil {
+		return err
+	}
+	w.BidArgs = p.BidArgs
+	w.ValidatorHostName = p.ValidatorHostName
+	w.decodeElapsed = time.Since(start)
+	w.payloadBytes = len(input)
+	return nil
 }
 
 func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash common.Hash, err error) {
@@ -69,7 +97,9 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 		}
 	}()
 
+	ecStart := time.Now()
 	builder, err := args.EcrecoverSender()
+	ecElapsed := time.Since(ecStart)
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
@@ -98,18 +128,32 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 
 	gstart := time.Now()
 	payBidTx, err := validator.GeneratePayBidTx(ctx, args.BidArgs, builder, args.RawBid.BuilderFee)
+	genElapsed := time.Since(gstart)
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
 		return
 	}
-	log.Debugw("GeneratePayBidTx", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", time.Since(gstart).Milliseconds())
+	log.Debugw("GeneratePayBidTx", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", genElapsed.Milliseconds())
 
 	args.PayBidTx = payBidTx
 	args.PayBidTxGasUsed = node.PayBidTxGasUsed
 
 	log.Debugw("[BID SENT]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
-	return validator.SendBid(ctx, args.BidArgs, builder)
+	fwdStart := time.Now()
+	bidHash, err = validator.SendBid(ctx, args.BidArgs, builder)
+	fwdElapsed := time.Since(fwdStart)
+	log.Debugw("[BID TIMING]",
+		"block", args.RawBid.BlockNumber,
+		"hash", args.RawBid.Hash().TerminalString(),
+		"txs", len(args.RawBid.Txs),
+		"payloadKB", args.payloadBytes/1024,
+		"decodeUs", args.decodeElapsed.Microseconds(),
+		"ecrecoverUs", ecElapsed.Microseconds(),
+		"genPayTxUs", genElapsed.Microseconds(),
+		"forwardUs", fwdElapsed.Microseconds(),
+		"totalUs", time.Since(start).Microseconds())
+	return bidHash, err
 }
 
 // BidBlockArgsWrapper wraps BidBlockArgs with a validator routing hint,
@@ -117,6 +161,33 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 type BidBlockArgsWrapper struct {
 	types.BidBlockArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
+
+	// decodeElapsed / payloadBytes are populated by UnmarshalJSON. The RPC
+	// framework pays the full ingress JSON-decode cost (header + every tx as
+	// hex + blob sidecars, ~256KB of hex per blob) BEFORE SendBidBlock is
+	// entered, so without this it is invisible to every existing log.
+	decodeElapsed time.Duration
+	payloadBytes  int
+}
+
+// UnmarshalJSON wraps the default decode so we can measure the ingress
+// JSON-decode cost. The body is already in memory here, so this times pure CPU
+// (hex decode of all txs + blob sidecars), not network.
+func (w *BidBlockArgsWrapper) UnmarshalJSON(input []byte) error {
+	start := time.Now()
+	type plain struct {
+		types.BidBlockArgs
+		ValidatorHostName string `json:"validatorHostName,omitempty"`
+	}
+	var p plain
+	if err := json.Unmarshal(input, &p); err != nil {
+		return err
+	}
+	w.BidBlockArgs = p.BidBlockArgs
+	w.ValidatorHostName = p.ValidatorHostName
+	w.decodeElapsed = time.Since(start)
+	w.payloadBytes = len(input)
+	return nil
 }
 
 // SendBidBlock receives a BidBlock from a builder and proxies it to the target
@@ -140,7 +211,13 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		err = types.NewInvalidBidError("empty BidBlock or Header")
 		return
 	}
+	// EcrecoverSender triggers BidBlock.Hash() = rlpHash(header + all txs +
+	// blob sidecars). The hash is cached, so this first call pays the full
+	// rlp-encode + keccak over the whole payload (blobs included); the later
+	// Hash() calls in the log lines are free.
+	ecStart := time.Now()
 	builder, err := args.EcrecoverSender()
+	ecElapsed := time.Since(ecStart)
 	if err != nil {
 		log.Errorw("failed to parse bid block signature", "err", err)
 		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
@@ -158,7 +235,23 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	}
 
 	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", args.BidBlock.Hash().TerminalString())
-	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder)
+	// validator.SendBidBlock -> ethclient.CallContext re-marshals the entire
+	// BidBlockArgs (blobs -> hex again) to JSON before the HTTP send, so
+	// forwardUs bundles egress-encode + network + validator handler + resp.
+	fwdStart := time.Now()
+	bidHash, err = validator.SendBidBlock(ctx, args.BidBlockArgs, builder)
+	fwdElapsed := time.Since(fwdStart)
+	log.Debugw("[BID BLOCK TIMING]",
+		"block", args.BidBlock.Header.Number,
+		"hash", args.BidBlock.Hash().TerminalString(),
+		"txs", len(args.BidBlock.Transactions),
+		"sidecars", len(args.BidBlock.Sidecars),
+		"payloadKB", args.payloadBytes/1024,
+		"decodeUs", args.decodeElapsed.Microseconds(),
+		"ecrecoverUs", ecElapsed.Microseconds(),
+		"forwardUs", fwdElapsed.Microseconds(),
+		"totalUs", time.Since(start).Microseconds())
+	return bidHash, err
 }
 
 // GetBidBlockPermissionArgs wraps the bare builder address with a validator

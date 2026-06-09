@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,46 @@ import (
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/metrics"
 )
+
+// rpcTrace captures the few HTTP transport-level timings that matter for
+// localizing where an RPC's wall-clock time is spent. DNS / dial / TLS are
+// omitted: the sentry talks to a fixed validator over plain HTTP, so those
+// stages are either 0 or already absorbed into gotConnUs on a cold connection.
+type rpcTrace struct {
+	start       time.Time
+	connReused  bool
+	wasIdle     bool
+	idleUs      int64
+	gotConnUs   int64
+	wroteReqUs  int64
+	firstByteUs int64
+}
+
+func newRPCTrace() (*rpcTrace, *httptrace.ClientTrace) {
+	t := &rpcTrace{start: time.Now()}
+	elapsed := func() int64 { return time.Since(t.start).Microseconds() }
+	return t, &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			t.gotConnUs = elapsed()
+			t.connReused = info.Reused
+			t.wasIdle = info.WasIdle
+			t.idleUs = info.IdleTime.Microseconds()
+		},
+		WroteRequest:         func(_ httptrace.WroteRequestInfo) { t.wroteReqUs = elapsed() },
+		GotFirstResponseByte: func() { t.firstByteUs = elapsed() },
+	}
+}
+
+func (t *rpcTrace) logFields() []any {
+	return []any{
+		"connReused", t.connReused,
+		"wasIdle", t.wasIdle,
+		"idleUs", t.idleUs,
+		"gotConnUs", t.gotConnUs,
+		"wroteReqUs", t.wroteReqUs,
+		"firstByteUs", t.firstByteUs,
+	}
+}
 
 var (
 	PayBidTxGasUsed = uint64(25000)
@@ -121,7 +162,18 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder common.Address) (common.Hash, error) {
-	hash, err := n.client.SendBid(ctx, args)
+	// Measure payload + HTTP transport stages to compare against SendBidBlock.
+	txBytes := 0
+	for _, t := range args.RawBid.Txs {
+		txBytes += len(t)
+	}
+	trace, hooks := newRPCTrace()
+	tracedCtx := httptrace.WithClientTrace(ctx, hooks)
+
+	t0 := time.Now()
+	hash, err := n.client.SendBid(tracedCtx, args)
+	rttUs := time.Since(t0).Microseconds()
+
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to send bid", "err", err)
@@ -130,22 +182,60 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder com
 			err = errors.New("timeout when send bid to validator")
 		}
 	}
-	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
+	fields := []any{
+		"block", args.RawBid.BlockNumber,
+		"builder", builder,
+		"hash", args.RawBid.Hash().TerminalString(),
+		"txCount", len(args.RawBid.Txs),
+		"txBytes", txBytes,
+		"rttUs", rttUs,
+	}
+	fields = append(fields, trace.logFields()...)
+	log.Debugw("[BID RESP]", fields...)
 
 	return hash, err
 }
 
 func (n *validator) SendBidBlock(ctx context.Context, args types.BidBlockArgs, builder common.Address) (common.Hash, error) {
-	hash, err := n.client.SendBidBlock(ctx, args)
+	// Measure payload + HTTP transport stages to compare against SendBid.
+	txBytes := 0
+	for _, t := range args.BidBlock.Transactions {
+		txBytes += len(t)
+	}
+	sidecarCount := 0
+	for _, sc := range args.BidBlock.Sidecars {
+		sidecarCount += len(sc.Blobs)
+	}
+	trace, hooks := newRPCTrace()
+	tracedCtx := httptrace.WithClientTrace(ctx, hooks)
+
+	t0 := time.Now()
+	hash, err := n.client.SendBidBlock(tracedCtx, args)
+	rttUs := time.Since(t0).Microseconds()
+
 	if err != nil {
 		metrics.ChainError.Inc()
-		log.Errorw("failed to send bid block", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", args.BidBlock.Hash().TerminalString(), "err", err)
+		log.Errorw("failed to send bid block",
+			"block", args.BidBlock.Header.Number,
+			"builder", builder,
+			"bidHash", args.BidBlock.Hash().TerminalString(),
+			"err", err)
 
 		if strings.Contains(err.Error(), "timeout") {
 			err = errors.New("timeout when send bid block to validator")
 		}
 	}
-	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", args.BidBlock.Hash().TerminalString())
+	fields := []any{
+		"block", args.BidBlock.Header.Number,
+		"builder", builder,
+		"bidHash", args.BidBlock.Hash().TerminalString(),
+		"txCount", len(args.BidBlock.Transactions),
+		"txBytes", txBytes,
+		"sidecarBlobs", sidecarCount,
+		"rttUs", rttUs,
+	}
+	fields = append(fields, trace.logFields()...)
+	log.Debugw("[BID BLOCK RESP]", fields...)
 
 	return hash, err
 }
