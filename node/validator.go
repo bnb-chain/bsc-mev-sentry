@@ -162,18 +162,7 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder common.Address) (common.Hash, error) {
-	// Measure payload + HTTP transport stages to compare against SendBidBlock.
-	txBytes := 0
-	for _, t := range args.RawBid.Txs {
-		txBytes += len(t)
-	}
-	trace, hooks := newRPCTrace()
-	tracedCtx := httptrace.WithClientTrace(ctx, hooks)
-
-	t0 := time.Now()
-	hash, err := n.client.SendBid(tracedCtx, args)
-	rttUs := time.Since(t0).Microseconds()
-
+	hash, err := n.client.SendBid(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to send bid", "err", err)
@@ -182,16 +171,7 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder com
 			err = errors.New("timeout when send bid to validator")
 		}
 	}
-	fields := []any{
-		"block", args.RawBid.BlockNumber,
-		"builder", builder,
-		"hash", args.RawBid.Hash().TerminalString(),
-		"txCount", len(args.RawBid.Txs),
-		"txBytes", txBytes,
-		"rttUs", rttUs,
-	}
-	fields = append(fields, trace.logFields()...)
-	log.Debugw("[BID RESP]", fields...)
+	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
 	return hash, err
 }

@@ -55,33 +55,6 @@ func NewMevSentry(cfg *Config,
 type BidArgsWrapper struct {
 	types.BidArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
-
-	// decodeElapsed / payloadBytes are populated by UnmarshalJSON so the
-	// handler can attribute the (otherwise invisible) ingress JSON-decode
-	// cost that the RPC framework pays before SendBid is ever entered.
-	decodeElapsed time.Duration
-	payloadBytes  int
-}
-
-// UnmarshalJSON wraps the default decode so we can measure how long the RPC
-// framework spends turning the request body into a BidArgsWrapper. The body is
-// already in memory at this point, so this times pure CPU (hex/JSON decode),
-// not network.
-func (w *BidArgsWrapper) UnmarshalJSON(input []byte) error {
-	start := time.Now()
-	type plain struct {
-		types.BidArgs
-		ValidatorHostName string `json:"validatorHostName,omitempty"`
-	}
-	var p plain
-	if err := json.Unmarshal(input, &p); err != nil {
-		return err
-	}
-	w.BidArgs = p.BidArgs
-	w.ValidatorHostName = p.ValidatorHostName
-	w.decodeElapsed = time.Since(start)
-	w.payloadBytes = len(input)
-	return nil
 }
 
 func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash common.Hash, err error) {
@@ -97,9 +70,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 		}
 	}()
 
-	ecStart := time.Now()
 	builder, err := args.EcrecoverSender()
-	ecElapsed := time.Since(ecStart)
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
@@ -128,32 +99,18 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 
 	gstart := time.Now()
 	payBidTx, err := validator.GeneratePayBidTx(ctx, args.BidArgs, builder, args.RawBid.BuilderFee)
-	genElapsed := time.Since(gstart)
 	if err != nil {
 		log.Errorw("failed to create pay bid tx", "err", err)
 		err = newSentryError("failed to create pay bid tx")
 		return
 	}
-	log.Debugw("GeneratePayBidTx", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", genElapsed.Milliseconds())
+	log.Debugw("GeneratePayBidTx", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString(), "elapsed", time.Since(gstart).Milliseconds())
 
 	args.PayBidTx = payBidTx
 	args.PayBidTxGasUsed = node.PayBidTxGasUsed
 
 	log.Debugw("[BID SENT]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
-	fwdStart := time.Now()
-	bidHash, err = validator.SendBid(ctx, args.BidArgs, builder)
-	fwdElapsed := time.Since(fwdStart)
-	log.Debugw("[BID TIMING]",
-		"block", args.RawBid.BlockNumber,
-		"hash", args.RawBid.Hash().TerminalString(),
-		"txs", len(args.RawBid.Txs),
-		"payloadKB", args.payloadBytes/1024,
-		"decodeUs", args.decodeElapsed.Microseconds(),
-		"ecrecoverUs", ecElapsed.Microseconds(),
-		"genPayTxUs", genElapsed.Microseconds(),
-		"forwardUs", fwdElapsed.Microseconds(),
-		"totalUs", time.Since(start).Microseconds())
-	return bidHash, err
+	return validator.SendBid(ctx, args.BidArgs, builder)
 }
 
 // BidBlockArgsWrapper wraps BidBlockArgs with a validator routing hint,
