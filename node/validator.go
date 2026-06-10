@@ -34,6 +34,7 @@ type rpcTrace struct {
 	connReused  bool
 	wasIdle     bool
 	idleUs      int64
+	getConnUs   int64
 	gotConnUs   int64
 	wroteReqUs  int64
 	firstByteUs int64
@@ -43,6 +44,11 @@ func newRPCTrace() (*rpcTrace, *httptrace.ClientTrace) {
 	t := &rpcTrace{start: time.Now()}
 	elapsed := func() int64 { return time.Since(t.start).Microseconds() }
 	return t, &httptrace.ClientTrace{
+		// GetConn fires when the transport STARTS acquiring a connection, i.e.
+		// right after the request (incl. params marshal) has been built. So:
+		//   marshal cost   ≈ getConnUs
+		//   conn pool wait = gotConnUs - getConnUs (should be ~0 on a warm pool)
+		GetConn: func(_ string) { t.getConnUs = elapsed() },
 		GotConn: func(info httptrace.GotConnInfo) {
 			t.gotConnUs = elapsed()
 			t.connReused = info.Reused
@@ -59,6 +65,7 @@ func (t *rpcTrace) logFields() []any {
 		"connReused", t.connReused,
 		"wasIdle", t.wasIdle,
 		"idleUs", t.idleUs,
+		"getConnUs", t.getConnUs,
 		"gotConnUs", t.gotConnUs,
 		"wroteReqUs", t.wroteReqUs,
 		"firstByteUs", t.firstByteUs,
