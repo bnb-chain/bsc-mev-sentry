@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/tredeske/u/ustrings"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -127,21 +129,118 @@ type BidBlockArgsWrapper struct {
 	payloadBytes  int
 }
 
-// UnmarshalJSON wraps the default decode so we can measure the ingress
-// JSON-decode cost. The body is already in memory here, so this times pure CPU
-// (hex decode of all txs + blob sidecars), not network.
+// UnmarshalJSON decodes the wrapper in two passes:
+//
+//  1. Structural scan: walk the JSON once and capture Header / Transactions /
+//     Sidecars as json.RawMessage leaves. No hex decode happens here; cost is
+//     dominated by byte scanning to find field boundaries (~2-3ms for ~1.7MB).
+//
+//  2. Parallel leaf decode: the actual hex→binary work runs concurrently —
+//     each blob sidecar gets its own goroutine (typical N ≤ 6, each ~3ms),
+//     and transactions share a 2-worker pool. Header and signature are tiny
+//     and decoded inline.
+//
+// EcrecoverSender still needs the typed BidBlock (Hash → rlpHash), so the
+// decode itself is unavoidable; the savings come from running its dominant
+// hex-decode in parallel.
 func (w *BidBlockArgsWrapper) UnmarshalJSON(input []byte) error {
 	start := time.Now()
-	type plain struct {
-		types.BidBlockArgs
-		ValidatorHostName string `json:"validatorHostName,omitempty"`
+
+	// Pass 1a: top-level fields. RawMessage copies the bytes it captures, so
+	// the leaves stay valid after json's input buffer is reused.
+	var top struct {
+		BidBlock          json.RawMessage `json:"BidBlock"`
+		Signature         json.RawMessage `json:"signature"`
+		ValidatorHostName string          `json:"validatorHostName,omitempty"`
 	}
-	var p plain
-	if err := json.Unmarshal(input, &p); err != nil {
+	if err := json.Unmarshal(input, &top); err != nil {
 		return err
 	}
-	w.BidBlockArgs = p.BidBlockArgs
-	w.ValidatorHostName = p.ValidatorHostName
+
+	// Pass 1b: inside BidBlock — pull out header / transactions / sidecars
+	// as raw leaves for parallel decoding below.
+	var bb struct {
+		Header       json.RawMessage   `json:"header"`
+		Transactions []json.RawMessage `json:"transactions"`
+		Sidecars     []json.RawMessage `json:"sidecars,omitempty"`
+	}
+	if err := json.Unmarshal(top.BidBlock, &bb); err != nil {
+		return err
+	}
+
+	bidBlock := &types.BidBlock{
+		Transactions: make([]hexutil.Bytes, len(bb.Transactions)),
+		Sidecars:     make(types.BlobSidecars, len(bb.Sidecars)),
+	}
+
+	// Header & signature are small — decode inline before fanning out.
+	if len(bb.Header) > 0 {
+		var hdr types.Header
+		if err := json.Unmarshal(bb.Header, &hdr); err != nil {
+			return fmt.Errorf("decode header: %w", err)
+		}
+		bidBlock.Header = &hdr
+	}
+	var sig hexutil.Bytes
+	if len(top.Signature) > 0 {
+		if err := sig.UnmarshalJSON(top.Signature); err != nil {
+			return fmt.Errorf("decode signature: %w", err)
+		}
+	}
+
+	g := new(errgroup.Group)
+
+	// Sidecars: fan-out one goroutine per sidecar. N is small (typically ≤ 6)
+	// and each is expensive (~3ms of hex→binary), so a pool would only add
+	// scheduling cost.
+	for i, sc := range bb.Sidecars {
+		i, sc := i, sc
+		g.Go(func() error {
+			var s types.BlobSidecar
+			if err := json.Unmarshal(sc, &s); err != nil {
+				return fmt.Errorf("decode sidecar %d: %w", i, err)
+			}
+			bidBlock.Sidecars[i] = &s
+			return nil
+		})
+	}
+
+	// Transactions: 2-worker pool. Per-tx work is small (~0.05ms); sidecar
+	// fan-out is the wall-clock floor anyway.
+	const numTxWorkers = 2
+	if n := len(bb.Transactions); n > 0 {
+		workers := numTxWorkers
+		if n < workers {
+			workers = n
+		}
+		txCh := make(chan int, n)
+		for i := 0; i < n; i++ {
+			txCh <- i
+		}
+		close(txCh)
+		for k := 0; k < workers; k++ {
+			g.Go(func() error {
+				for idx := range txCh {
+					var b hexutil.Bytes
+					if err := b.UnmarshalJSON(bb.Transactions[idx]); err != nil {
+						return fmt.Errorf("decode tx %d: %w", idx, err)
+					}
+					bidBlock.Transactions[idx] = b
+				}
+				return nil
+			})
+		}
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	w.BidBlockArgs = types.BidBlockArgs{
+		BidBlock:  bidBlock,
+		Signature: sig,
+	}
+	w.ValidatorHostName = top.ValidatorHostName
 	w.decodeElapsed = time.Since(start)
 	w.payloadBytes = len(input)
 	return nil
