@@ -12,7 +12,7 @@ import (
 	"github.com/tredeske/u/ustrings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -52,7 +52,7 @@ func NewMevSentry(cfg *Config,
 
 // BidArgsWrapper Override the BidArgs type to add validator host name
 type BidArgsWrapper struct {
-	types.BidArgs
+	buildertypes.BidArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
 }
 
@@ -72,11 +72,11 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
-		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
 	} else if _, ok := s.builders[builder]; !ok {
 		log.Errorw("builder not registered", "address", builder)
-		err = types.NewInvalidBidError("builder not registered")
+		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
 	}
 	log.Debugw("[BID RECEIVED]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
@@ -91,7 +91,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	if args.RawBid.BuilderFee != nil && bidFeeCeil != nil {
 		if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
 			log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
-			err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
+			err = buildertypes.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
 			return
 		}
 	}
@@ -115,7 +115,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 // BidBlockArgsWrapper wraps BidBlockArgs with a validator routing hint,
 // mirroring BidArgsWrapper for the legacy SendBid path.
 type BidBlockArgsWrapper struct {
-	types.BidBlockArgs
+	buildertypes.BidBlockArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
 }
 
@@ -137,28 +137,29 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 
 	if args.BidBlock == nil || args.BidBlock.Header == nil {
 		log.Errorw("empty bid block or header")
-		err = types.NewInvalidBidError("empty BidBlock or Header")
+		err = buildertypes.NewInvalidBidError("empty BidBlock or Header")
 		return
 	}
+	signingHash := args.BidBlock.Hash()
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid block signature", "err", err)
-		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
 	} else if _, ok := s.builders[builder]; !ok {
 		log.Errorw("builder not registered", "address", builder)
-		err = types.NewInvalidBidError("builder not registered")
+		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
 	}
-	log.Debugw("[BID BLOCK RECEIVED]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", args.BidBlock.Hash().TerminalString())
+	log.Debugw("[BID BLOCK RECEIVED]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
 
 	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
 	if err != nil {
 		return
 	}
 
-	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", args.BidBlock.Hash().TerminalString())
-	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder)
+	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
+	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder, signingHash)
 }
 
 // GetBidBlockPermissionArgs wraps the bare builder address with a validator
@@ -212,7 +213,7 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 	return
 }
 
-func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err error) {
+func (s *MevSentry) Params(ctx context.Context) (param *buildertypes.MevParams, err error) {
 	method := "mev_params"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -276,7 +277,7 @@ func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (has
 	return validator.HasBuilder(ctx, builder)
 }
 
-func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err error) {
+func (s *MevSentry) ReportIssue(ctx context.Context, issue buildertypes.BidIssue) (err error) {
 	method := "mev_reportIssue"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -329,7 +330,7 @@ func (s *MevSentry) validatorFromRequest(ctx context.Context, validatorHostName 
 	validator, ok := s.validators[hostname]
 	if !ok {
 		log.Errorw("validator not found", "hostname", hostname)
-		return nil, types.NewInvalidBidError("validator hostname not found")
+		return nil, buildertypes.NewInvalidBidError("validator hostname not found")
 	}
 	return validator, nil
 }
