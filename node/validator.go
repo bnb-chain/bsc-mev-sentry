@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -47,13 +48,15 @@ var (
 )
 
 type Validator interface {
-	SendBid(context.Context, types.BidArgs, common.Address) (common.Hash, error)
+	SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error)
+	SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error)
+	GetBidBlockPermission(ctx context.Context, builder common.Address) (*ethclient.BidBlockPermission, error)
 	MevRunning() bool
 	HasBuilder(ctx context.Context, builder common.Address) (bool, error)
 	BestBidGasFee(ctx context.Context, parentHash common.Hash) (*big.Int, error)
-	MevParams(ctx context.Context) (*types.MevParams, error)
+	MevParams(ctx context.Context) (*buildertypes.MevParams, error)
 	BuilderFeeCeil() *big.Int
-	GeneratePayBidTx(ctx context.Context, args types.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
+	GeneratePayBidTx(ctx context.Context, args buildertypes.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error)
 }
 
 type ValidatorConfig struct {
@@ -114,11 +117,11 @@ type validator struct {
 	scheduler         *gocron.Scheduler
 	chainID           atomic.Pointer[big.Int]
 	mevRunning        uint32
-	mevParams         atomic.Pointer[types.MevParams]
+	mevParams         atomic.Pointer[buildertypes.MevParams]
 	payAccountBalance atomic.Pointer[big.Int]
 }
 
-func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder common.Address) (common.Hash, error) {
+func (n *validator) SendBid(ctx context.Context, args buildertypes.BidArgs, builder common.Address) (common.Hash, error) {
 	hash, err := n.client.SendBid(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -131,6 +134,38 @@ func (n *validator) SendBid(ctx context.Context, args types.BidArgs, builder com
 	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
 	return hash, err
+}
+
+func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	hash, err := n.client.SendBidBlock(ctx, args)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to send bid block",
+			"block", args.BidBlock.Header.Number,
+			"builder", builder,
+			"bidHash", bidHash.TerminalString(),
+			"err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when send bid block to validator")
+		}
+	}
+	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", bidHash.TerminalString())
+
+	return hash, err
+}
+
+func (n *validator) GetBidBlockPermission(ctx context.Context, builder common.Address) (*ethclient.BidBlockPermission, error) {
+	result, err := n.client.GetBidBlockPermission(ctx, builder)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to get bid block permission", "err", err)
+
+		if strings.Contains(err.Error(), "timeout") {
+			err = errors.New("timeout when get bid block permission from validator")
+		}
+	}
+	return result, err
 }
 
 func (n *validator) MevRunning() bool {
@@ -199,7 +234,7 @@ func (n *validator) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 	return n.client.BestBidGasFee(ctx, parentHash)
 }
 
-func (n *validator) MevParams(_ context.Context) (*types.MevParams, error) {
+func (n *validator) MevParams(_ context.Context) (*buildertypes.MevParams, error) {
 	return n.mevParams.Load(), nil
 }
 
@@ -214,7 +249,7 @@ func (n *validator) BuilderFeeCeil() *big.Int {
 	return big.NewInt(0)
 }
 
-func (n *validator) GeneratePayBidTx(_ context.Context, args types.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
+func (n *validator) GeneratePayBidTx(_ context.Context, args buildertypes.BidArgs, builder common.Address, builderFee *big.Int) (hexutil.Bytes, error) {
 	// take pay bid tx as block tag
 	var amount = big.NewInt(0)
 

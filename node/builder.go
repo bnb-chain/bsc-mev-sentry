@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 	"github.com/ethereum/go-ethereum/miner/builderclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -12,7 +12,7 @@ import (
 )
 
 type Builder interface {
-	ReportIssue(context.Context, types.BidIssue) error
+	ReportIssue(context.Context, buildertypes.BidIssue) error
 }
 
 type BuilderConfig struct {
@@ -38,6 +38,6 @@ type builder struct {
 	client *builderclient.Client
 }
 
-func (b *builder) ReportIssue(ctx context.Context, issue types.BidIssue) error {
+func (b *builder) ReportIssue(ctx context.Context, issue buildertypes.BidIssue) error {
 	return b.client.ReportIssue(ctx, &issue)
 }

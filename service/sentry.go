@@ -12,7 +12,8 @@ import (
 	"github.com/tredeske/u/ustrings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
@@ -51,7 +52,7 @@ func NewMevSentry(cfg *Config,
 
 // BidArgsWrapper Override the BidArgs type to add validator host name
 type BidArgsWrapper struct {
-	types.BidArgs
+	buildertypes.BidArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
 }
 
@@ -71,31 +72,17 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	builder, err := args.EcrecoverSender()
 	if err != nil {
 		log.Errorw("failed to parse bid signature", "err", err)
-		err = types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
 	} else if _, ok := s.builders[builder]; !ok {
 		log.Errorw("builder not registered", "address", builder)
-		err = types.NewInvalidBidError("builder not registered")
+		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
 	}
 	log.Debugw("[BID RECEIVED]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	if args.ValidatorHostName != "" {
-		log.Debugw("hostname override", "from", hostname, "to", args.ValidatorHostName)
-		hostname = args.ValidatorHostName
-	} else {
-		log.Debugw("hostname from context", "hostname", hostname)
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
+	if err != nil {
 		return
 	}
 
@@ -104,7 +91,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	if args.RawBid.BuilderFee != nil && bidFeeCeil != nil {
 		if args.RawBid.BuilderFee.Cmp(bidFeeCeil) > 0 {
 			log.Errorw("bid fee exceeds the ceiling", "fee", args.RawBid.BuilderFee, "ceiling", bidFeeCeil.Uint64())
-			err = types.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
+			err = buildertypes.NewInvalidBidError(fmt.Sprintf("bid fee exceeds the ceiling %v", bidFeeCeil))
 			return
 		}
 	}
@@ -125,6 +112,85 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 	return validator.SendBid(ctx, args.BidArgs, builder)
 }
 
+// BidBlockArgsWrapper wraps BidBlockArgs with a validator routing hint,
+// mirroring BidArgsWrapper for the legacy SendBid path.
+type BidBlockArgsWrapper struct {
+	buildertypes.BidBlockArgs
+	ValidatorHostName string `json:"validatorHostName,omitempty"`
+}
+
+// SendBidBlock receives a BidBlock from a builder and proxies it to the target
+// validator. Unlike SendBid, no PayBidTx is generated — the zero-simulate path
+// requires pure transparent forwarding.
+func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) (bidHash common.Hash, err error) {
+	method := "mev_sendBidBlock"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
+
+	if args.BidBlock == nil || args.BidBlock.Header == nil {
+		log.Errorw("empty bid block or header")
+		err = buildertypes.NewInvalidBidError("empty BidBlock or Header")
+		return
+	}
+	signingHash := args.BidBlock.Hash()
+	builder, err := args.EcrecoverSender()
+	if err != nil {
+		log.Errorw("failed to parse bid block signature", "err", err)
+		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+		return
+	} else if _, ok := s.builders[builder]; !ok {
+		log.Errorw("builder not registered", "address", builder)
+		err = buildertypes.NewInvalidBidError("builder not registered")
+		return
+	}
+	log.Debugw("[BID BLOCK RECEIVED]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
+
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
+	if err != nil {
+		return
+	}
+
+	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
+	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder, signingHash)
+}
+
+// GetBidBlockPermissionArgs wraps the bare builder address with a validator
+// routing hint, mirroring BidArgsWrapper / BidBlockArgsWrapper for the
+// SendBid / SendBidBlock paths.
+type GetBidBlockPermissionArgs struct {
+	Builder           common.Address `json:"builder"`
+	ValidatorHostName string         `json:"validatorHostName,omitempty"`
+}
+
+func (s *MevSentry) GetBidBlockPermission(ctx context.Context, args GetBidBlockPermissionArgs) (result *ethclient.BidBlockPermission, err error) {
+	method := "mev_getBidBlockPermission"
+	start := time.Now()
+	defer recordLatency(method, start)
+	defer timeoutCancel(&ctx, s.timeout)()
+	defer func() {
+		if err != nil {
+			if rpcErr, ok := err.(rpc.Error); ok {
+				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
+			}
+		}
+	}()
+
+	validator, err := s.validatorFromRequest(ctx, args.ValidatorHostName)
+	if err != nil {
+		return
+	}
+
+	return validator.GetBidBlockPermission(ctx, args.Builder)
+}
+
 func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (fee *big.Int, err error) {
 	method := "mev_bestBidGasFee"
 	start := time.Now()
@@ -138,15 +204,8 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -154,7 +213,7 @@ func (s *MevSentry) BestBidGasFee(ctx context.Context, parentHash common.Hash) (
 	return
 }
 
-func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err error) {
+func (s *MevSentry) Params(ctx context.Context) (param *buildertypes.MevParams, err error) {
 	method := "mev_params"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -167,15 +226,8 @@ func (s *MevSentry) Params(ctx context.Context) (param *types.MevParams, err err
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -196,15 +248,8 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
@@ -224,22 +269,15 @@ func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (has
 		}
 	}()
 
-	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
-	if strings.Contains(hostname, ":") {
-		hostname = hostname[:strings.Index(hostname, ":")]
-	}
-
-	validator, ok := s.validators[hostname]
-	if !ok {
-		log.Errorw("validator not found", "hostname", hostname)
-		err = types.NewInvalidBidError("validator hostname not found")
+	validator, err := s.validatorFromRequest(ctx, "")
+	if err != nil {
 		return
 	}
 
 	return validator.HasBuilder(ctx, builder)
 }
 
-func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err error) {
+func (s *MevSentry) ReportIssue(ctx context.Context, issue buildertypes.BidIssue) (err error) {
 	method := "mev_reportIssue"
 	start := time.Now()
 	defer recordLatency(method, start)
@@ -270,6 +308,31 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue types.BidIssue) (err 
 
 func recordLatency(method string, start time.Time) {
 	metrics.ApiLatencyHist.WithLabelValues(method).Observe(float64(time.Since(start).Milliseconds()))
+}
+
+// validatorFromRequest resolves the target validator for an RPC call.
+// validatorHostName, when non-empty, overrides the HTTP Host-based routing —
+// used by SendBid / SendBidBlock so a builder can pick the validator
+// explicitly via the wrapper's ValidatorHostName field. Other RPCs pass "".
+func (s *MevSentry) validatorFromRequest(ctx context.Context, validatorHostName string) (node.Validator, error) {
+	hostname := rpc.PeerInfoFromContext(ctx).HTTP.Host
+	if strings.Contains(hostname, ":") {
+		hostname = hostname[:strings.Index(hostname, ":")]
+	}
+
+	if validatorHostName != "" {
+		log.Debugw("hostname override", "from", hostname, "to", validatorHostName)
+		hostname = validatorHostName
+	} else {
+		log.Debugw("hostname from context", "hostname", hostname)
+	}
+
+	validator, ok := s.validators[hostname]
+	if !ok {
+		log.Errorw("validator not found", "hostname", hostname)
+		return nil, buildertypes.NewInvalidBidError("validator hostname not found")
+	}
+	return validator, nil
 }
 
 func nilCancel() {
