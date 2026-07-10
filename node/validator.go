@@ -137,20 +137,29 @@ func (n *validator) SendBid(ctx context.Context, args buildertypes.BidArgs, buil
 }
 
 func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	start := time.Now()
 	hash, err := n.client.SendBidBlock(ctx, args)
+	elapsedMs := time.Since(start).Milliseconds()
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to send bid block",
 			"block", args.BidBlock.Header.Number,
 			"builder", builder,
 			"bidHash", bidHash.TerminalString(),
+			"elapsedMs", elapsedMs,
 			"err", err)
 
 		if strings.Contains(err.Error(), "timeout") {
 			err = errors.New("timeout when send bid block to validator")
 		}
 	}
-	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", bidHash.TerminalString())
+	log.Debugw("[BID BLOCK RESP]",
+		"block", args.BidBlock.Header.Number,
+		"builder", builder,
+		"bidHash", bidHash.TerminalString(),
+		"txs", len(args.BidBlock.Transactions),
+		"sidecars", len(args.BidBlock.Sidecars),
+		"elapsedMs", elapsedMs)
 
 	return hash, err
 }

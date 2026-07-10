@@ -159,7 +159,15 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	}
 
 	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
-	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder, signingHash)
+	fwdStart := time.Now()
+	bidHash, err = validator.SendBidBlock(ctx, args.BidBlockArgs, builder, signingHash)
+	log.Debugw("[BID BLOCK FORWARD]",
+		"block", args.BidBlock.Header.Number,
+		"hash", signingHash.TerminalString(),
+		"txs", len(args.BidBlock.Transactions),
+		"sidecars", len(args.BidBlock.Sidecars),
+		"elapsedMs", time.Since(fwdStart).Milliseconds())
+	return
 }
 
 // GetBidBlockPermissionArgs wraps the bare builder address with a validator
