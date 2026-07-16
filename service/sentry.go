@@ -24,6 +24,9 @@ import (
 type Config struct {
 	// HTTPListenAddr define the address sentry service listen on
 	HTTPListenAddr string
+	// GRPCListenAddr, when non-empty, enables the BuilderRelay gRPC endpoint
+	// (BEP-675 SendBidBlock over RLP). Empty (default) keeps it off.
+	GRPCListenAddr string
 	// RPCConcurrency limits simultaneous requests
 	RPCConcurrency int64
 	// RPCTimeout rpc request timeout
@@ -135,6 +138,12 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
+	return s.sendBidBlock(ctx, args)
+}
+
+// sendBidBlock is the transport-agnostic core of SendBidBlock, shared by the
+// JSON-RPC handler above and the gRPC BuilderRelay handler.
+func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper) (bidHash common.Hash, err error) {
 	if args.BidBlock == nil || args.BidBlock.Header == nil {
 		log.Errorw("empty bid block or header")
 		err = buildertypes.NewInvalidBidError("empty BidBlock or Header")

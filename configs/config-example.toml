@@ -4,6 +4,7 @@ RootDir = "./logs" # Directory for log files. Set to "" to write to stderr only 
 
 [Service]
 HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
+GRPCListenAddr = "" # BEP-675 BuilderRelay gRPC endpoint (e.g. "localhost:50051"). Empty = disabled.
 RPCConcurrency = 100 # The maximum number of concurrent requests.
 RPCTimeout = "10s" # The timeout for RPC requests.
 

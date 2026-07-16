@@ -63,9 +63,19 @@ func main() {
 		panic(err)
 	}
 
+	// One semaphore across HTTP and gRPC so total in-flight requests respect a
+	// single RPCConcurrency budget (separate limits would allow 2x).
+	concurrencySem := ginutils.NewConcurrencySem(cfg.Service.RPCConcurrency)
+
+	if cfg.Service.GRPCListenAddr != "" {
+		if _, err := service.StartGRPCServer(cfg.Service.GRPCListenAddr, sentryService, concurrencySem); err != nil {
+			panic(err)
+		}
+	}
+
 	app := gin.New()
 	app.Use(
-		ginutils.ConcurrencyLimiter(cfg.Service.RPCConcurrency),
+		ginutils.ConcurrencyLimiterWith(concurrencySem),
 		ginutils.PanicRecovery(),
 		gzip.Gzip(gzip.DefaultCompression),
 	)
