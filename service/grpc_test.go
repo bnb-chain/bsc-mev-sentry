@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/big"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -15,6 +18,12 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 	mevpb "github.com/bnb-chain/bsc-mev-sentry/proto"
@@ -216,4 +225,327 @@ func TestGRPCIngressMatchesJSONPath(t *testing.T) {
 	require.Equal(t, jsonVal.gotArgs.BidBlock.Transactions, grpcVal.gotArgs.BidBlock.Transactions)
 	require.Equal(t, jsonVal.gotArgs.BidBlock.Sidecars, grpcVal.gotArgs.BidBlock.Sidecars)
 	require.Equal(t, jsonVal.gotArgs.BidBlock.Header.Hash(), grpcVal.gotArgs.BidBlock.Header.Hash())
+}
+
+// toGRPCStatus must give builders distinguishable codes per MEV error class.
+func TestToGRPCStatusMapping(t *testing.T) {
+	cases := []struct {
+		err  error
+		want codes.Code
+	}{
+		{buildertypes.NewInvalidBidError("bad sig"), codes.InvalidArgument},
+		{buildertypes.NewBidBlockPreSealVerifyError("verify"), codes.InvalidArgument},
+		{buildertypes.ErrMevNotRunning, codes.Unavailable},
+		{buildertypes.ErrMevBusy, codes.ResourceExhausted},
+		{buildertypes.ErrMevNotInTurn, codes.FailedPrecondition},
+		{buildertypes.NewBidBlockPermissionRevokedError("revoked"), codes.PermissionDenied},
+		{buildertypes.NewBidBlockTooLateError("too late"), codes.DeadlineExceeded},
+		{context.DeadlineExceeded, codes.DeadlineExceeded},
+		{context.Canceled, codes.Canceled},
+		{errors.New("plain"), codes.Internal},
+	}
+	for _, c := range cases {
+		st, ok := status.FromError(toGRPCStatus(c.err))
+		require.True(t, ok)
+		require.Equal(t, c.want, st.Code(), "err=%v", c.err)
+	}
+
+	// MEV business code must survive in status details.
+	st, _ := status.FromError(toGRPCStatus(buildertypes.NewBidBlockTooLateError("x")))
+	require.NotEmpty(t, st.Details())
+	info, ok := st.Details()[0].(*errdetails.ErrorInfo)
+	require.True(t, ok)
+	require.Equal(t, strconv.Itoa(buildertypes.BidBlockTooLateError), info.Reason)
+}
+
+// Handler-level rejections before/after decode must come back as
+// InvalidArgument, not Internal.
+func TestGRPCHandlerErrorPaths(t *testing.T) {
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{}, map[common.Address]node.Builder{})
+	h := &BuilderRelayServer{sentry: sentry}
+
+	// empty validator_host_name
+	_, err := h.SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
+		BidBlockRlp: []byte{0x01}, Signature: []byte{0x02},
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	// invalid RLP
+	_, err = h.SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
+		BidBlockRlp: []byte{0xff, 0xff}, Signature: []byte{0x02}, ValidatorHostName: "val-1",
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t, "invalid BidBlock rlp", status.Convert(err).Message())
+
+	// well-formed block signed by an unregistered builder
+	key, err2 := crypto.GenerateKey()
+	require.NoError(t, err2)
+	block := sampleBidBlock()
+	sig, err2 := crypto.Sign(block.Hash().Bytes(), key)
+	require.NoError(t, err2)
+	encoded, err2 := rlp.EncodeToBytes(block)
+	require.NoError(t, err2)
+	_, err = h.SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
+		BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1",
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+// End-to-end over a real listener: health probes answer, the full interceptor
+// chain runs, and graceful shutdown flips health to NOT_SERVING.
+func TestStartGRPCServerEndToEnd(t *testing.T) {
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{}, map[common.Address]node.Builder{})
+	svc, err := StartGRPCServer("127.0.0.1:0", sentry, make(chan struct{}, 2))
+	require.NoError(t, err)
+
+	conn, err := grpc.NewClient(svc.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// health: overall and named service both SERVING
+	hc := healthpb.NewHealthClient(conn)
+	for _, svcName := range []string{"", "mev.v1.BuilderRelay"} {
+		resp, herr := hc.Check(ctx, &healthpb.HealthCheckRequest{Service: svcName})
+		require.NoError(t, herr, "service=%q", svcName)
+		require.Equal(t, healthpb.HealthCheckResponse_SERVING, resp.Status)
+	}
+
+	// business call through the real chain (recovery + concurrency interceptors)
+	relay := mevpb.NewBuilderRelayClient(conn)
+	_, err = relay.SendBidBlock(ctx, &mevpb.BidBlockRequest{
+		BidBlockRlp: []byte{0xff}, Signature: []byte{0x01}, ValidatorHostName: "val-1",
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	// Shutdown must flip health to NOT_SERVING BEFORE the server stops (so LBs
+	// drain first). Watch observes the transition; a plain post-stop error
+	// could not distinguish NOT_SERVING from the server just being gone.
+	watchCtx, watchCancel := context.WithCancel(ctx)
+	defer watchCancel()
+	w, err := hc.Watch(watchCtx, &healthpb.HealthCheckRequest{Service: ""})
+	require.NoError(t, err)
+	first, err := w.Recv()
+	require.NoError(t, err)
+	require.Equal(t, healthpb.HealthCheckResponse_SERVING, first.Status)
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		svc.Shutdown(2 * time.Second)
+		close(shutdownDone)
+	}()
+	second, err := w.Recv()
+	require.NoError(t, err)
+	require.Equal(t, healthpb.HealthCheckResponse_NOT_SERVING, second.Status)
+	watchCancel() // release the stream so GracefulStop can finish
+	<-shutdownDone
+}
+
+// panicValidator triggers a handler panic once the request reaches forwarding.
+type panicValidator struct{ mockValidator }
+
+func (p *panicValidator) SendBidBlock(context.Context, buildertypes.BidBlockArgs, common.Address, common.Hash) (common.Hash, error) {
+	panic("boom")
+}
+
+// A handler panic must surface as Internal while the server keeps serving.
+func TestGRPCRecoveryKeepsServing(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	builderAddr := crypto.PubkeyToAddress(key.PublicKey)
+	block := sampleBidBlock()
+	sig, err := crypto.Sign(block.Hash().Bytes(), key)
+	require.NoError(t, err)
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{"val-1": &panicValidator{}},
+		map[common.Address]node.Builder{builderAddr: nil})
+	svc, err := StartGRPCServer("127.0.0.1:0", sentry, nil)
+	require.NoError(t, err)
+	defer svc.Shutdown(time.Second)
+
+	conn, err := grpc.NewClient(svc.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	relay := mevpb.NewBuilderRelayClient(conn)
+	req := &mevpb.BidBlockRequest{BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1"}
+	_, err = relay.SendBidBlock(ctx, req)
+	require.Equal(t, codes.Internal, status.Code(err))
+
+	// process/server survived the panic: health answers, and a second call
+	// still reaches the handler (panics again → Internal, not a dead conn).
+	hc := healthpb.NewHealthClient(conn)
+	resp, err := hc.Check(ctx, &healthpb.HealthCheckRequest{})
+	require.NoError(t, err)
+	require.Equal(t, healthpb.HealthCheckResponse_SERVING, resp.Status)
+	_, err = relay.SendBidBlock(ctx, req)
+	require.Equal(t, codes.Internal, status.Code(err))
+}
+
+// blockingValidator holds every forward until release is closed.
+type blockingValidator struct {
+	mockValidator
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingValidator) SendBidBlock(_ context.Context, _ buildertypes.BidBlockArgs, _ common.Address, bidHash common.Hash) (common.Hash, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return bidHash, nil
+}
+
+// With the semaphore full: a queued request must abort when its context ends,
+// and health must keep answering (it bypasses the semaphore).
+func TestGRPCConcurrencyLimitAndHealthBypass(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	builderAddr := crypto.PubkeyToAddress(key.PublicKey)
+	block := sampleBidBlock()
+	sig, err := crypto.Sign(block.Hash().Bytes(), key)
+	require.NoError(t, err)
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+
+	val := &blockingValidator{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{"val-1": val},
+		map[common.Address]node.Builder{builderAddr: nil})
+	svc, err := StartGRPCServer("127.0.0.1:0", sentry, make(chan struct{}, 1))
+	require.NoError(t, err)
+	defer svc.Shutdown(time.Second)
+
+	conn, err := grpc.NewClient(svc.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	relay := mevpb.NewBuilderRelayClient(conn)
+	req := &mevpb.BidBlockRequest{BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1"}
+
+	// First call occupies the single semaphore slot and blocks in the validator.
+	firstDone := make(chan error, 1)
+	go func() {
+		_, callErr := relay.SendBidBlock(ctx, req)
+		firstDone <- callErr
+	}()
+	<-val.entered // semaphore held from here on
+
+	// Second call queues on the semaphore; its deadline must free it.
+	shortCtx, shortCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer shortCancel()
+	_, err = relay.SendBidBlock(shortCtx, req)
+	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+
+	// Health bypasses the semaphore and answers while the slot is held.
+	hc := healthpb.NewHealthClient(conn)
+	resp, err := hc.Check(ctx, &healthpb.HealthCheckRequest{})
+	require.NoError(t, err)
+	require.Equal(t, healthpb.HealthCheckResponse_SERVING, resp.Status)
+
+	close(val.release)
+	require.NoError(t, <-firstDone)
+}
+
+// The error metric must keep the MEV business code; converting to a gRPC
+// status first would erase it (regression test for that exact bug).
+func TestErrorCodeLabelKeepsBusinessCode(t *testing.T) {
+	orig := buildertypes.ErrMevBusy
+	final := toGRPCStatus(orig)
+	require.Equal(t, strconv.Itoa(buildertypes.MevBusyError), errorCodeLabel(orig, final))
+
+	invalid := buildertypes.NewInvalidBidError("invalid BidBlock rlp")
+	require.Equal(t, strconv.Itoa(buildertypes.InvalidBidParamError), errorCodeLabel(invalid, toGRPCStatus(invalid)))
+
+	plain := errors.New("plain failure")
+	require.Equal(t, codes.Internal.String(), errorCodeLabel(plain, toGRPCStatus(plain)))
+}
+
+// Internal statuses must not leak raw internal error text to callers.
+func TestInternalErrorsAreOpaque(t *testing.T) {
+	st, ok := status.FromError(toGRPCStatus(errors.New("dial tcp 10.0.0.1:8545: connection refused")))
+	require.True(t, ok)
+	require.Equal(t, codes.Internal, st.Code())
+	require.Equal(t, "internal error", st.Message())
+}
+
+func TestGRPCRejectsOversizedRequest(t *testing.T) {
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{}, map[common.Address]node.Builder{})
+	svc, err := StartGRPCServer("127.0.0.1:0", sentry, make(chan struct{}, 1))
+	require.NoError(t, err)
+	defer svc.Shutdown(time.Second)
+
+	conn, err := grpc.NewClient(svc.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = mevpb.NewBuilderRelayClient(conn).SendBidBlock(ctx, &mevpb.BidBlockRequest{
+		BidBlockRlp:       make([]byte, maxGRPCMsgSize+1),
+		ValidatorHostName: "val-1",
+	})
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+}
+
+func TestGRPCShutdownDrainsInFlightBid(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	builderAddr := crypto.PubkeyToAddress(key.PublicKey)
+	block := sampleBidBlock()
+	sig, err := crypto.Sign(block.Hash().Bytes(), key)
+	require.NoError(t, err)
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+
+	val := &blockingValidator{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	sentry := NewMevSentry(&Config{RPCTimeout: Duration(0)},
+		map[string]node.Validator{"val-1": val},
+		map[common.Address]node.Builder{builderAddr: nil})
+	svc, err := StartGRPCServer("127.0.0.1:0", sentry, make(chan struct{}, 1))
+	require.NoError(t, err)
+
+	conn, err := grpc.NewClient(svc.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := mevpb.NewBuilderRelayClient(conn).SendBidBlock(ctx, &mevpb.BidBlockRequest{
+			BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1",
+		})
+		callDone <- callErr
+	}()
+	<-val.entered
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		svc.Shutdown(2 * time.Second)
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned before the in-flight bid completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(val.release)
+	require.NoError(t, <-callDone)
+	select {
+	case <-shutdownDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not finish after the in-flight bid completed")
+	}
 }

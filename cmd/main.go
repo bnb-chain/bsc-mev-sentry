@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/gin-gonic/contrib/gzip"
@@ -67,8 +73,11 @@ func main() {
 	// single RPCConcurrency budget (separate limits would allow 2x).
 	concurrencySem := ginutils.NewConcurrencySem(cfg.Service.RPCConcurrency)
 
+	var grpcService *service.GRPCService
 	if cfg.Service.GRPCListenAddr != "" {
-		if _, err := service.StartGRPCServer(cfg.Service.GRPCListenAddr, sentryService, concurrencySem); err != nil {
+		var err error
+		grpcService, err = service.StartGRPCServer(cfg.Service.GRPCListenAddr, sentryService, concurrencySem)
+		if err != nil {
 			panic(err)
 		}
 	}
@@ -82,9 +91,47 @@ func main() {
 
 	app.POST("/", gin.WrapH(rpcServer))
 
-	if err := app.Run(cfg.Service.HTTPListenAddr); err != nil {
-		log.Errorf("fail to run rpc server, err:%v", err)
+	httpServer := &http.Server{Addr: cfg.Service.HTTPListenAddr, Handler: app}
+	httpErrCh := make(chan error, 1)
+	go func() {
+		httpErrCh <- httpServer.ListenAndServe()
+	}()
+
+	// Block until a shutdown signal or an HTTP listener failure, then drain
+	// BOTH listeners: gRPC flips health to NOT_SERVING and drains streams,
+	// http.Server.Shutdown stops accepting and waits for in-flight JSON-RPC.
+	// A rolling restart therefore never kills a bid mid-forward on either path.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case sig := <-sigCh:
+		log.Infow("received signal, shutting down", "signal", sig.String())
+	case err := <-httpErrCh:
+		log.Errorf("http server stopped, err:%v", err)
 	}
+
+	// Drain window for in-flight requests on shutdown. Covers the default
+	// RPCTimeout (10s) with margin while staying well inside the typical k8s
+	// termination grace period (30s).
+	const drainTimeout = 15 * time.Second
+	var wg sync.WaitGroup
+	if grpcService != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			grpcService.Shutdown(drainTimeout)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Errorf("http server shutdown, err:%v", err)
+		}
+	}()
+	wg.Wait()
 }
 
 func initLogger(cfg *config.LogConfig) {
