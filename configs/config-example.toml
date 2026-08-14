@@ -9,6 +9,7 @@ RPCTimeout = "10s" # The timeout for RPC requests.
 
 [[Validators]]
 PrivateURL = "http://10.200.31.36:8545"
+SkipTLSVerify = false # Keep certificate verification enabled. Set true only for a trusted self-signed endpoint.
 PublicHostName = "bsc-testnet-elbrus.bnbchain.org"
 PayAccountMode = "privateKey"
 PrivateKey = "b1fed931ad50...34796ddbee68a53cf"
