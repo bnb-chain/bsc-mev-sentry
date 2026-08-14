@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/tap"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
-	mevpb "github.com/bnb-chain/bsc-mev-sentry/proto"
+	"github.com/ethereum/go-ethereum/core/types/builder/mevpb"
 )
 
 func sampleBidBlock() *buildertypes.BidBlock {

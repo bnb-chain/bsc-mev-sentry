@@ -26,7 +26,7 @@ import (
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/metrics"
-	mevpb "github.com/bnb-chain/bsc-mev-sentry/proto"
+	"github.com/ethereum/go-ethereum/core/types/builder/mevpb"
 )
 
 const (
