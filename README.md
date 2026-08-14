@@ -35,6 +35,7 @@ RPCTimeout = "10s" # The timeout for RPC requests.
 
 [[Validators]] # A list of validators to forward requests to.
 PrivateURL = "https://bsc-fuji" # The private rpc url of the validator, it can only been accessed in the local network.
+SkipTLSVerify = false # Keep certificate verification enabled. Set true only for a trusted self-signed endpoint.
 PublicHostName = "bsc-fuji" # The domain name of the validator, if a request's HOST info is same with this, it will be forwarded to the validator.
 PayAccountMode = "privateKey" # The unlock mode of the pay bid account.
 PrivateKey = "59ba8068eb256d520...2bd306e1bd603fdb8c8da10e8" # The private key of the pay bid account.

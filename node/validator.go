@@ -2,11 +2,8 @@ package node
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"math/big"
-	"net"
-	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,27 +22,7 @@ import (
 	"github.com/bnb-chain/bsc-mev-sentry/metrics"
 )
 
-var (
-	PayBidTxGasUsed = uint64(25000)
-
-	dialer = &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 60 * time.Second,
-	}
-
-	transport = &http.Transport{
-		DialContext:         dialer.DialContext,
-		MaxIdleConnsPerHost: 50,
-		MaxConnsPerHost:     50,
-		IdleConnTimeout:     90 * time.Second,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
-	}
-
-	client = &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: transport,
-	}
-)
+var PayBidTxGasUsed = uint64(25000)
 
 type Validator interface {
 	SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error)
@@ -62,6 +39,8 @@ type Validator interface {
 type ValidatorConfig struct {
 	PrivateURL     string
 	PublicHostName string
+	// SkipTLSVerify permits self-signed HTTPS endpoints. Certificate verification is enabled by default.
+	SkipTLSVerify bool
 
 	PayAccountMode account.Mode
 	// PrivateKey private key of sentry wallet
@@ -75,7 +54,11 @@ type ValidatorConfig struct {
 }
 
 func NewValidator(config ValidatorConfig) Validator {
-	cli, err := ethclient.DialOptions(context.Background(), config.PrivateURL, rpc.WithHTTPClient(client))
+	cli, err := ethclient.DialOptions(
+		context.Background(),
+		config.PrivateURL,
+		rpc.WithHTTPClient(newValidatorHTTPClient(config.SkipTLSVerify)),
+	)
 	if err != nil {
 		log.Errorw("failed to dial validator", "url", config.PrivateURL, "err", err)
 		return nil
