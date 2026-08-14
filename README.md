@@ -28,6 +28,9 @@ Please create entirely new accounts as pay bid accounts.
 
 config-example.toml:
 ```
+[Debug]
+ListenAddr = "127.0.0.1:6060" # Keep pprof and metrics loopback-only unless access is otherwise protected.
+
 [Service]
 HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
 RPCConcurrency = 100 # The maximum number of concurrent requests.
