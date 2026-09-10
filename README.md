@@ -63,3 +63,43 @@ Address = "0x980A75eC...fc9b863D5"
 URL = "http://bsc-builder-2"
 
 ```
+
+# On-chain builder registry (optional)
+
+Instead of maintaining `[[Builders]]` by hand, the sentry can synchronize its allowlist from the
+BuilderKeyRegistry contract published by the Good Will Alliance
+(`good-will-alliance/contracts/builder-key-registry`). Enable it with a `[Registry]` section:
+
+```toml
+[Registry]
+Enabled = true
+ContractAddress = "0x..."            # registry proxy address on this network
+RPCURL = "http://<validator-node>:8545"  # your own node; a third-party RPC could serve a forged set
+PollInterval = "15s"
+BlockTag = "finalized"               # finalized (default) | safe | latest
+BlockedBuilders = ["0x..."]          # always rejected, even if present in the registry
+
+[[Registry.ExtraBuilders]]           # always accepted in addition to the registry set
+Address = "0x..."
+URL = "http://my-builder"
+```
+
+Behavior:
+
+- Effective allowlist = (registry set, or the static `[[Builders]]` until the first successful read)
+  ∪ `ExtraBuilders` − `BlockedBuilders`.
+- Every `PollInterval` the sentry reads `getBuilders()` at `BlockTag`. If the set changed it is swapped
+  in atomically; requests never see a half-updated allowlist.
+- A failed read, or a read that returns zero builders, never shrinks the allowlist. The previous set
+  stays in place and a warning is logged. The static `[[Builders]]` list can therefore be kept as a
+  bootstrap fallback for restarts.
+- A builder whose issue-reporting URL cannot be dialed is still allowlisted; the connection is retried
+  on the next `mev_reportIssue`.
+
+Observability:
+
+- `mev_registryStatus` (read-only RPC) returns the source (`static` or `registry`), the block number,
+  block hash, fetch time and fingerprint of the applied snapshot, the effective builder count, and the
+  last error. Two sentries reporting the same fingerprint hold the same set.
+- Prometheus: `bsc_mev_sentry_registry_sync_total{result}`, `bsc_mev_sentry_registry_synced_block`,
+  `bsc_mev_sentry_registry_builder_count`, `bsc_mev_sentry_registry_last_success_timestamp_seconds`.
