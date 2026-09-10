@@ -20,6 +20,8 @@ PublicHostName = "bsc-testnet-ararat.bnbchain.org"
 PayAccountMode = "privateKey"
 PrivateKey = "ce3f1b757384...755f66f647503"
 
+# Static builder allowlist. With [Registry] enabled this is only the bootstrap set
+# used until the first successful on-chain read; afterwards it is ignored.
 [[Builders]]
 Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5" # The address of the builder.
 URL = "http://bsc-builder-1" # The public URL of the builder.
@@ -27,3 +29,19 @@ URL = "http://bsc-builder-1" # The public URL of the builder.
 [[Builders]]
 Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5"
 URL = "http://bsc-builder-2"
+
+# Optional: keep the allowlist in sync with the on-chain BuilderKeyRegistry.
+# Effective allowlist = (registry set, or [[Builders]] until first read) ∪ ExtraBuilders − BlockedBuilders.
+# A failed or empty read never shrinks the allowlist; the previous set stays in place.
+[Registry]
+Enabled = false
+ContractAddress = "0x0000000000000000000000000000000000000000" # BuilderKeyRegistry proxy on this network.
+RPCURL = "http://10.200.31.36:8545" # Use the validator's own node, not a third-party RPC.
+PollInterval = "15s"
+BlockTag = "finalized" # finalized (default), safe, or latest.
+BlockedBuilders = [] # Always rejected, even if present in the registry.
+
+# Always accepted in addition to the registry set (e.g. a validator's own builder).
+# [[Registry.ExtraBuilders]]
+# Address = "0x..."
+# URL = "http://my-builder"

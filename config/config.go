@@ -10,13 +10,18 @@ import (
 	"github.com/naoina/toml"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
+	"github.com/bnb-chain/bsc-mev-sentry/registry"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
 )
 
 type Config struct {
 	Service    service.Config
 	Validators []node.ValidatorConfig
-	Builders   []node.BuilderConfig
+	// Builders is the static allowlist. With Registry.Enabled it only serves as
+	// the bootstrap set until the first successful on-chain read.
+	Builders []node.BuilderConfig
+	// Registry optionally synchronizes Builders from the on-chain registry.
+	Registry registry.Config
 
 	Debug DebugConfig
 	Log   LogConfig
@@ -34,6 +39,9 @@ func Load(file string) *Config {
 	err = tomlSettings.NewDecoder(bufio.NewReader(f)).Decode(&cfg)
 	// Add file name to errors that have a line number.
 	if _, ok := err.(*toml.LineError); ok {
+		panic(err)
+	}
+	if err := cfg.Registry.Validate(); err != nil {
 		panic(err)
 	}
 	return &cfg

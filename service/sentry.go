@@ -42,22 +42,42 @@ type MevSentry struct {
 	timeout         Duration
 	grpcConcurrency int64
 
-	validators map[string]node.Validator       // hostname -> validator
-	builders   map[common.Address]node.Builder // address -> builder
+	validators map[string]node.Validator // hostname -> validator
+	builders   *BuilderSet               // allowlist; swapped atomically by the registry syncer
+	registry   *RegistryState            // read-only status behind mev_registryStatus
 }
 
+// NewMevSentry builds a sentry over a static allowlist.
 func NewMevSentry(cfg *Config,
 	validators map[string]node.Validator,
 	builders map[common.Address]node.Builder,
 ) *MevSentry {
-	s := &MevSentry{
+	return NewMevSentryWithSet(cfg, validators, NewBuilderSet(builders),
+		NewRegistryState(false, common.Address{}, len(builders)))
+}
+
+// NewMevSentryWithSet builds a sentry whose allowlist can be replaced at runtime
+// through the shared BuilderSet (see registry.Syncer).
+func NewMevSentryWithSet(cfg *Config,
+	validators map[string]node.Validator,
+	builders *BuilderSet,
+	registry *RegistryState,
+) *MevSentry {
+	return &MevSentry{
 		timeout:         cfg.RPCTimeout,
 		grpcConcurrency: cfg.GRPCConcurrency,
 		validators:      validators,
 		builders:        builders,
+		registry:        registry,
 	}
+}
 
-	return s
+// RegistryStatus reports where the current allowlist came from and at which block.
+// Exposed as mev_registryStatus so operators can verify sentries have converged.
+func (s *MevSentry) RegistryStatus() RegistryStatus {
+	st := s.registry.Snapshot()
+	st.BuilderCount = s.builders.Len()
+	return st
 }
 
 // BidArgsWrapper Override the BidArgs type to add validator host name
@@ -84,7 +104,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
-	} else if _, ok := s.builders[builder]; !ok {
+	} else if _, ok := s.builders.Lookup(builder); !ok {
 		log.Errorw("builder not registered", "address", builder)
 		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
@@ -176,7 +196,7 @@ func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		log.Errorw("failed to parse bid block signature", "err", err)
 		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
-	} else if _, ok := s.builders[builder]; !ok {
+	} else if _, ok := s.builders.Lookup(builder); !ok {
 		log.Errorw("builder not registered", "address", builder)
 		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
@@ -321,7 +341,7 @@ func (s *MevSentry) ReportIssue(ctx context.Context, issue buildertypes.BidIssue
 	var builder node.Builder
 	var ok bool
 
-	builder, ok = s.builders[issue.Builder]
+	builder, ok = s.builders.Lookup(issue.Builder)
 	if !ok {
 		log.Errorw("builder url not found", "address", issue.Builder, "issue", issue)
 		err = errors.New("builder not found")

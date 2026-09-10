@@ -23,6 +23,7 @@ import (
 	ginutils "github.com/bnb-chain/bsc-mev-sentry/gin"
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/node"
+	"github.com/bnb-chain/bsc-mev-sentry/registry"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
 )
 
@@ -55,16 +56,34 @@ func main() {
 		}
 	}
 
-	builders := make(map[common.Address]node.Builder)
+	// Static allowlist from [[Builders]]. With [Registry] enabled this is only the
+	// bootstrap set; the syncer replaces it after the first successful read.
+	builders := make(map[common.Address]node.Builder, len(cfg.Builders))
 	for _, b := range cfg.Builders {
-		builder := node.NewBuilder(b)
-		if builder != nil {
-			builders[b.Address] = builder
+		builders[b.Address] = node.NewBuilder(b)
+	}
+	builderSet := service.NewBuilderSet(builders)
+	registryState := service.NewRegistryState(cfg.Registry.Enabled, cfg.Registry.ContractAddress, len(builders))
+
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+	if cfg.Registry.Enabled {
+		reader, err := registry.Dial(rootCtx, cfg.Registry.RPCURL, cfg.Registry.ContractAddress, cfg.Registry.BlockTag)
+		if err != nil {
+			panic(err)
 		}
+		log.Infow("registry sync enabled",
+			"contract", cfg.Registry.ContractAddress,
+			"rpc", cfg.Registry.RPCURL,
+			"blockTag", cfg.Registry.BlockTag,
+			"pollInterval", time.Duration(cfg.Registry.PollInterval).String(),
+			"extra", len(cfg.Registry.ExtraBuilders),
+			"blocked", len(cfg.Registry.BlockedBuilders))
+		go registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
 	}
 
 	rpcServer := rpc.NewServer()
-	sentryService := service.NewMevSentry(&cfg.Service, validators, builders)
+	sentryService := service.NewMevSentryWithSet(&cfg.Service, validators, builderSet, registryState)
 	if err := rpcServer.RegisterName("mev", sentryService); err != nil {
 		panic(err)
 	}
