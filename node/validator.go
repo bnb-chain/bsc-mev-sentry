@@ -122,6 +122,7 @@ type validator struct {
 }
 
 func (n *validator) SendBid(ctx context.Context, args buildertypes.BidArgs, builder common.Address) (common.Hash, error) {
+	start := time.Now()
 	hash, err := n.client.SendBid(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -131,12 +132,14 @@ func (n *validator) SendBid(ctx context.Context, args buildertypes.BidArgs, buil
 			err = errors.New("timeout when send bid to validator")
 		}
 	}
-	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder, "hash", args.RawBid.Hash().TerminalString())
+	log.Debugw("[BID RESP]", "block", args.RawBid.BlockNumber, "builder", builder,
+		"hash", args.RawBid.Hash().TerminalString(), "elapsedUs", time.Since(start).Microseconds())
 
 	return hash, err
 }
 
 func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	start := time.Now()
 	hash, err := n.client.SendBidBlock(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
@@ -150,7 +153,8 @@ func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlock
 			err = errors.New("timeout when send bid block to validator")
 		}
 	}
-	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder, "bidHash", bidHash.TerminalString())
+	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder,
+		"bidHash", bidHash.TerminalString(), "elapsedUs", time.Since(start).Microseconds())
 
 	return hash, err
 }

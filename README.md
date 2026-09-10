@@ -30,8 +30,9 @@ config-example.toml:
 ```
 [Service]
 HTTPListenAddr = "localhost:8555" # The address to listen on for HTTP requests.
+GRPCListenAddr = "" # Optional BidBlock gRPC endpoint. Empty = disabled.
 RPCConcurrency = 100 # The maximum number of concurrent requests.
-RPCTimeout = "10s" # The timeout for RPC requests.
+RPCTimeout = "10s" # Total RPC timeout. gRPC uses 10s when omitted.
 
 [[Validators]] # A list of validators to forward requests to.
 PrivateURL = "https://bsc-fuji" # The private rpc url of the validator, it can only been accessed in the local network.

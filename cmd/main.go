@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/gin-gonic/contrib/gzip"
@@ -63,18 +69,63 @@ func main() {
 		panic(err)
 	}
 
+	// Share one concurrency budget across HTTP and gRPC.
+	concurrencySem := ginutils.NewConcurrencySem(cfg.Service.RPCConcurrency)
+
+	var grpcService *service.GRPCService
+	if cfg.Service.GRPCListenAddr != "" {
+		var err error
+		grpcService, err = service.StartGRPCServer(cfg.Service.GRPCListenAddr, sentryService, concurrencySem)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	app := gin.New()
 	app.Use(
-		ginutils.ConcurrencyLimiter(cfg.Service.RPCConcurrency),
+		ginutils.ConcurrencyLimiterWith(concurrencySem),
 		ginutils.PanicRecovery(),
 		gzip.Gzip(gzip.DefaultCompression),
 	)
 
 	app.POST("/", gin.WrapH(rpcServer))
 
-	if err := app.Run(cfg.Service.HTTPListenAddr); err != nil {
-		log.Errorf("fail to run rpc server, err:%v", err)
+	httpServer := &http.Server{Addr: cfg.Service.HTTPListenAddr, Handler: app}
+	httpErrCh := make(chan error, 1)
+	go func() {
+		httpErrCh <- httpServer.ListenAndServe()
+	}()
+
+	// Drain both listeners on a signal or HTTP failure.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case sig := <-sigCh:
+		log.Infow("received signal, shutting down", "signal", sig.String())
+	case err := <-httpErrCh:
+		log.Errorf("http server stopped, err:%v", err)
 	}
+
+	// Covers the default 10s RPC timeout within a typical 30s pod grace period.
+	const drainTimeout = 15 * time.Second
+	var wg sync.WaitGroup
+	if grpcService != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			grpcService.Shutdown(drainTimeout)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Errorf("http server shutdown, err:%v", err)
+		}
+	}()
+	wg.Wait()
 }
 
 func initLogger(cfg *config.LogConfig) {
