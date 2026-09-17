@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,13 +20,15 @@ type Result string
 const (
 	ResultApplied   Result = "applied"   // registry changed; allowlist replaced
 	ResultUnchanged Result = "unchanged" // same fingerprint as last time
-	ResultEmpty     Result = "empty"     // registry returned zero builders; ignored
+	ResultEmpty     Result = "empty"     // registry decoded to zero builders; applied (allowlist = ExtraBuilders only)
 	ResultError     Result = "error"     // read failed; previous allowlist kept
 )
 
 // Syncer periodically reads the registry and pushes the merged allowlist to the
-// sentry. It never shrinks the allowlist on failure: errors and empty results
-// leave the previous set in place.
+// sentry. A failed read never changes the allowlist. A successfully decoded
+// registry is authoritative even when empty: an admin removing the last key must
+// take effect. Misconfigured addresses do not look like an empty set; they
+// surface as ErrNoCode (no code at address) and are treated as failures.
 type Syncer struct {
 	reader   Reader
 	interval time.Duration
@@ -71,18 +74,15 @@ func (s *Syncer) Run(ctx context.Context) {
 func (s *Syncer) SyncOnce(ctx context.Context) Result {
 	snap, err := s.reader.Fetch(ctx)
 	if err != nil {
+		// Full error (may include the node URL) goes to the log only; the public
+		// status RPC gets the class.
 		log.Warnw("registry sync failed; keeping current allowlist", "err", err)
-		s.status.RecordError(err)
+		s.status.RecordError(ErrorClass(err))
 		return s.record(ResultError)
-	}
-	if len(snap.Builders) == 0 {
-		log.Warnw("registry returned no builders; keeping current allowlist",
-			"block", snap.BlockNumber, "contract", s.contract)
-		s.status.RecordError(errEmptyRegistry)
-		return s.record(ResultEmpty)
 	}
 	if s.last != nil && s.last.Fingerprint == snap.Fingerprint {
 		s.status.RecordSuccess(snap.BlockNumber, snap.BlockHash, snap.FetchedAt, snap.Fingerprint, s.builders.Len())
+		metrics.RegistrySyncedBlock.Set(float64(snap.BlockNumber))
 		return s.record(ResultUnchanged)
 	}
 
@@ -94,6 +94,14 @@ func (s *Syncer) SyncOnce(ctx context.Context) Result {
 		prev = s.last.Builders
 	}
 	added, removed := Diff(prev, snap.Builders)
+	result := ResultApplied
+	if len(snap.Builders) == 0 {
+		// Loud, because it is either a deliberate network-wide shutdown of MEV
+		// bids or an admin mistake; either way operators should see it.
+		result = ResultEmpty
+		log.Warnw("registry is empty; allowlist reduced to ExtraBuilders",
+			"block", snap.BlockNumber, "contract", s.contract, "effective", len(effective))
+	}
 	log.Infow("registry allowlist applied",
 		"block", snap.BlockNumber,
 		"fingerprint", snap.Fingerprint.TerminalString(),
@@ -106,12 +114,12 @@ func (s *Syncer) SyncOnce(ctx context.Context) Result {
 	s.status.RecordSuccess(snap.BlockNumber, snap.BlockHash, snap.FetchedAt, snap.Fingerprint, len(effective))
 	metrics.RegistrySyncedBlock.Set(float64(snap.BlockNumber))
 	metrics.RegistryBuilderCount.Set(float64(len(effective)))
-	return s.record(ResultApplied)
+	return s.record(result)
 }
 
 func (s *Syncer) record(r Result) Result {
 	metrics.RegistrySyncTotal.WithLabelValues(string(r)).Inc()
-	if r == ResultApplied || r == ResultUnchanged {
+	if r != ResultError {
 		metrics.RegistryLastSuccess.SetToCurrentTime()
 	}
 	return r
@@ -127,8 +135,22 @@ func summarize(addrs []common.Address) any {
 	return fmt.Sprintf("%d addresses (first %d: %v)", len(addrs), maxListed, addrs[:maxListed])
 }
 
-type registryError string
-
-func (e registryError) Error() string { return string(e) }
-
-const errEmptyRegistry registryError = "registry returned no builders"
+// ErrorClass maps a fetch error to a short, URL-free label safe to expose over RPC.
+func ErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrNoCode):
+		return "no_code_at_address"
+	case errors.Is(err, ErrDecode):
+		return "decode_failed"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, ErrResolveBlock):
+		return "resolve_block_failed"
+	case errors.Is(err, ErrCall):
+		return "eth_call_failed"
+	default:
+		return "fetch_failed"
+	}
+}

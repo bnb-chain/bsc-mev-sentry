@@ -83,6 +83,18 @@ func Merge(base []Builder, extra []node.BuilderConfig, blocked []common.Address)
 	return list
 }
 
+// Bootstrap derives the allowlist to serve before the first successful registry
+// read: the static [[Builders]] with the same local policy (ExtraBuilders,
+// BlockedBuilders) that later applies to registry snapshots. Without this a
+// locally blocked key would pass until the first sync succeeds.
+func Bootstrap(cfg *Config, static []node.BuilderConfig) []node.BuilderConfig {
+	base := make([]Builder, 0, len(static))
+	for _, s := range static {
+		base = append(base, Builder{Addr: s.Address, URL: s.URL})
+	}
+	return Merge(base, cfg.ExtraBuilders, cfg.BlockedBuilders)
+}
+
 // Diff returns addresses present in next but not prev, and vice versa.
 func Diff(prev, next []Builder) (added, removed []common.Address) {
 	p := make(map[common.Address]struct{}, len(prev))

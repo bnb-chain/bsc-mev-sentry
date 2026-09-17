@@ -32,13 +32,13 @@ URL = "http://bsc-builder-2"
 
 # Optional: keep the allowlist in sync with the on-chain BuilderKeyRegistry.
 # Effective allowlist = (registry set, or [[Builders]] until first read) ∪ ExtraBuilders − BlockedBuilders.
-# A failed or empty read never shrinks the allowlist; the previous set stays in place.
+# A failed read never changes the allowlist. A successfully decoded registry is authoritative,
+# even when empty. ExtraBuilders/BlockedBuilders also apply to the static list before the first read.
 [Registry]
 Enabled = false
 ContractAddress = "0x0000000000000000000000000000000000000000" # BuilderKeyRegistry proxy on this network.
 RPCURL = "http://10.200.31.36:8545" # Use the validator's own node, not a third-party RPC.
-PollInterval = "15s"
-BlockTag = "finalized" # finalized (default), safe, or latest.
+PollInterval = "15s" # Reads are taken at the finalized block; a change is visible one poll after finality.
 BlockedBuilders = [] # Always rejected, even if present in the registry.
 
 # Always accepted in addition to the registry set (e.g. a validator's own builder).

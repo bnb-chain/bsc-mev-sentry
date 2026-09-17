@@ -3,7 +3,9 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
+	"net/url"
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
@@ -119,7 +121,7 @@ func TestClient_FetchDecodesContractOutput(t *testing.T) {
 		header: &headerLite{Number: big.NewInt(52_000_000), Hash: common.HexToHash("0xabc")},
 		output: packBuilders(t, want),
 	}
-	c := NewClient(fb, contract, rpc.FinalizedBlockNumber)
+	c := NewClient(fb, contract)
 
 	snap, err := c.Fetch(context.Background())
 	require.NoError(t, err)
@@ -139,18 +141,56 @@ func TestClient_FetchErrors(t *testing.T) {
 	contract := common.HexToAddress("0xc0de")
 	hdr := &headerLite{Number: big.NewInt(1), Hash: common.HexToHash("0x1")}
 
-	_, err := NewClient(&fakeBackend{headerErr: errors.New("rpc down")}, contract, rpc.LatestBlockNumber).Fetch(context.Background())
+	_, err := NewClient(&fakeBackend{headerErr: errors.New("rpc down")}, contract).Fetch(context.Background())
 	require.ErrorContains(t, err, "resolve block tag")
 
-	_, err = NewClient(&fakeBackend{header: hdr, callErr: errors.New("boom")}, contract, rpc.LatestBlockNumber).Fetch(context.Background())
+	_, err = NewClient(&fakeBackend{header: hdr, callErr: errors.New("boom")}, contract).Fetch(context.Background())
 	require.ErrorContains(t, err, "eth_call")
 
 	// No code at address: eth_call returns empty output, not an error.
-	_, err = NewClient(&fakeBackend{header: hdr, output: nil}, contract, rpc.LatestBlockNumber).Fetch(context.Background())
+	_, err = NewClient(&fakeBackend{header: hdr, output: nil}, contract).Fetch(context.Background())
 	require.ErrorContains(t, err, "ContractAddress")
 
-	_, err = NewClient(&fakeBackend{header: hdr, output: []byte{1, 2, 3}}, contract, rpc.LatestBlockNumber).Fetch(context.Background())
+	_, err = NewClient(&fakeBackend{header: hdr, output: []byte{1, 2, 3}}, contract).Fetch(context.Background())
 	require.ErrorContains(t, err, "decode")
+}
+
+// The status RPC is public. A failed read must never surface the node URL that
+// the underlying *url.Error carries.
+func TestSyncer_StatusNeverExposesNodeURL(t *testing.T) {
+	const secretURL = "http://10.200.31.36:8545"
+	urlErr := &url.Error{Op: "Post", URL: secretURL, Err: errors.New("dial tcp: connection refused")}
+	require.Contains(t, urlErr.Error(), secretURL, "precondition: raw error does contain the URL")
+
+	hdr := &headerLite{Number: big.NewInt(1), Hash: common.HexToHash("0x1")}
+	cases := []struct {
+		name    string
+		backend *fakeBackend
+		class   string
+	}{
+		{"header fails", &fakeBackend{headerErr: urlErr}, "resolve_block_failed"},
+		{"call fails", &fakeBackend{header: hdr, callErr: urlErr}, "eth_call_failed"},
+		{"no code", &fakeBackend{header: hdr, output: nil}, "no_code_at_address"},
+		{"garbage", &fakeBackend{header: hdr, output: []byte{1, 2, 3}}, "decode_failed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reader := NewClient(c.backend, common.Address{1})
+			s, _, state := newSyncer(reader, Config{}, nil)
+			s.SyncOnce(context.Background())
+			st := state.Snapshot()
+			require.Equal(t, c.class, st.LastError)
+			require.NotContains(t, st.LastError, secretURL)
+			require.NotContains(t, st.LastError, "10.200")
+		})
+	}
+}
+
+func TestErrorClass(t *testing.T) {
+	require.Equal(t, "", ErrorClass(nil))
+	require.Equal(t, "timeout", ErrorClass(fmt.Errorf("%w: %w", ErrCall, context.DeadlineExceeded)))
+	require.Equal(t, "eth_call_failed", ErrorClass(fmt.Errorf("%w: %w", ErrCall, errors.New("x"))))
+	require.Equal(t, "fetch_failed", ErrorClass(errors.New("something else")))
 }
 
 func TestClient_FetchEmptyRegistryIsNotAnError(t *testing.T) {
@@ -158,7 +198,7 @@ func TestClient_FetchEmptyRegistryIsNotAnError(t *testing.T) {
 		header: &headerLite{Number: big.NewInt(1), Hash: common.HexToHash("0x1")},
 		output: packBuilders(t, []Builder{}),
 	}
-	snap, err := NewClient(fb, common.Address{1}, rpc.LatestBlockNumber).Fetch(context.Background())
+	snap, err := NewClient(fb, common.Address{1}).Fetch(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, snap.Builders) // the syncer decides what to do with it
 }
@@ -220,11 +260,11 @@ func TestSyncer_FirstReadReplacesStaticSet(t *testing.T) {
 	require.Equal(t, Fingerprint([]Builder{b(a1, "u1", "n"), b(a2, "u2", "n")}), st.Fingerprint)
 }
 
-func TestSyncer_ErrorAndEmptyKeepPreviousSet(t *testing.T) {
+func TestSyncer_ErrorKeepsPreviousSet(t *testing.T) {
 	static := map[common.Address]node.Builder{a4: node.NewBuilder(node.BuilderConfig{Address: a4})}
 	reader := &fakeReader{
-		snaps: []*Snapshot{nil, snapOf(5), snapOf(6, b(a1, "u", "n")), nil, snapOf(8)},
-		errs:  []error{errors.New("rpc timeout"), nil, nil, errors.New("again"), nil},
+		snaps: []*Snapshot{nil, snapOf(6, b(a1, "u", "n")), nil},
+		errs:  []error{errors.New("rpc timeout"), nil, errors.New("again")},
 	}
 	s, set, state := newSyncer(reader, Config{}, static)
 
@@ -232,24 +272,68 @@ func TestSyncer_ErrorAndEmptyKeepPreviousSet(t *testing.T) {
 	require.Equal(t, ResultError, s.SyncOnce(context.Background()))
 	require.Equal(t, map[common.Address]bool{a4: true}, addrs(set))
 	require.Equal(t, "static", state.Snapshot().Source)
-	require.Contains(t, state.Snapshot().LastError, "rpc timeout")
+	require.Equal(t, "fetch_failed", state.Snapshot().LastError)
 
-	// 2) empty before any success: static set stays
-	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a4: true}, addrs(set))
-
-	// 3) success: registry applied
+	// 2) success: registry applied
 	require.Equal(t, ResultApplied, s.SyncOnce(context.Background()))
 	require.Equal(t, map[common.Address]bool{a1: true}, addrs(set))
 
-	// 4) error after success: registry set stays, source remains "registry"
+	// 3) error after success: registry set stays, source remains "registry"
 	require.Equal(t, ResultError, s.SyncOnce(context.Background()))
 	require.Equal(t, map[common.Address]bool{a1: true}, addrs(set))
 	require.Equal(t, "registry", state.Snapshot().Source)
+}
 
-	// 5) empty after success: registry set stays
+// A decoded empty registry is authoritative: removing the last key must take
+// effect, leaving only the local ExtraBuilders.
+func TestSyncer_EmptyRegistryIsApplied(t *testing.T) {
+	cfg := Config{ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}}}
+	static := map[common.Address]node.Builder{a4: node.NewBuilder(node.BuilderConfig{Address: a4})}
+	reader := &fakeReader{snaps: []*Snapshot{
+		snapOf(6, b(a1, "u", "n")),
+		snapOf(7), // admin removed the last key
+		snapOf(8), // still empty: unchanged, no rebuild
+	}}
+	s, set, state := newSyncer(reader, cfg, static)
+
+	require.Equal(t, ResultApplied, s.SyncOnce(context.Background()))
+	require.Equal(t, map[common.Address]bool{a1: true, a3: true}, addrs(set))
+
 	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a1: true}, addrs(set))
+	require.Equal(t, map[common.Address]bool{a3: true}, addrs(set), "registry key gone, extra stays")
+	st := state.Snapshot()
+	require.Equal(t, "registry", st.Source)
+	require.Equal(t, uint64(7), st.BlockNumber)
+	require.Equal(t, 1, st.BuilderCount)
+	require.Empty(t, st.LastError, "an empty registry is a successful read, not an error")
+
+	require.Equal(t, ResultUnchanged, s.SyncOnce(context.Background()))
+	require.Equal(t, map[common.Address]bool{a3: true}, addrs(set))
+}
+
+func TestSyncer_EmptyRegistryBeforeAnySuccessReplacesStatic(t *testing.T) {
+	static := map[common.Address]node.Builder{a4: node.NewBuilder(node.BuilderConfig{Address: a4})}
+	reader := &fakeReader{snaps: []*Snapshot{snapOf(5)}}
+	s, set, _ := newSyncer(reader, Config{}, static)
+
+	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
+	require.Equal(t, 0, set.Len(), "static bootstrap set is superseded by the (empty) registry")
+}
+
+// Local policy must hold from process start, not only after the first sync.
+func TestBootstrap_AppliesExtraAndBlockedToStaticSet(t *testing.T) {
+	cfg := Config{
+		ExtraBuilders:   []node.BuilderConfig{{Address: a3, URL: "mine"}},
+		BlockedBuilders: []common.Address{a2},
+	}
+	static := []node.BuilderConfig{{Address: a1, URL: "s1"}, {Address: a2, URL: "s2"}}
+
+	got := Bootstrap(&cfg, static)
+
+	require.Equal(t, []node.BuilderConfig{
+		{Address: a1, URL: "s1"},
+		{Address: a3, URL: "mine"},
+	}, got, "blocked a2 removed, extra a3 added, before any registry read")
 }
 
 func TestSyncer_UnchangedFingerprintDoesNotRebuild(t *testing.T) {
@@ -311,9 +395,6 @@ func TestConfig_Validate(t *testing.T) {
 	require.ErrorContains(t, c.Validate(), "RPCURL")
 	c.RPCURL = "http://localhost:8545"
 	require.NoError(t, c.Validate())
-	c.BlockTag = "pending"
-	require.ErrorContains(t, c.Validate(), "BlockTag")
 
-	require.Equal(t, DefaultPollInterval, (&Config{}).pollInterval())
-	require.Equal(t, DefaultBlockTag, (&Config{}).blockTag())
+	require.Equal(t, DefaultPollInterval, (&Config{}).EffectivePollInterval())
 }

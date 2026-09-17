@@ -26,6 +26,15 @@ const builderRegistryABI = `[{
   ]}]
 }]`
 
+// Sentinel errors classify a failed read. The syncer reports only the class through
+// mev_registryStatus; the wrapped cause (which may contain the node URL) stays in logs.
+var (
+	ErrResolveBlock = errors.New("registry: resolve block tag")
+	ErrCall         = errors.New("registry: eth_call getBuilders")
+	ErrNoCode       = errors.New("registry: empty eth_call result; is ContractAddress correct on this network?")
+	ErrDecode       = errors.New("registry: decode getBuilders")
+)
+
 var registryABI = func() abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(builderRegistryABI))
 	if err != nil {
@@ -52,41 +61,41 @@ type headerLite struct {
 	Hash   common.Hash
 }
 
-// Client reads BuilderKeyRegistry.getBuilders() at a block tag.
+// readBlockTag is the block every read is taken at. Finalized blocks cannot be
+// reorganized, so an applied snapshot is never rolled back under the sentry; the
+// cost is a few blocks of extra latency, well under one poll interval.
+const readBlockTag = rpc.FinalizedBlockNumber
+
+// Client reads BuilderKeyRegistry.getBuilders() at the finalized block.
 type Client struct {
 	backend  ChainBackend
 	contract common.Address
-	blockTag rpc.BlockNumber
 	timeout  time.Duration
 }
 
 // Dial connects to rpcURL and returns a Client for the registry at contract.
-func Dial(ctx context.Context, rpcURL string, contract common.Address, blockTag string) (*Client, error) {
-	tag, err := ParseBlockTag(blockTag)
-	if err != nil {
-		return nil, err
-	}
+func Dial(ctx context.Context, rpcURL string, contract common.Address) (*Client, error) {
 	ec, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("registry: dial %s: %w", rpcURL, err)
 	}
-	return NewClient(&ethBackend{ec}, contract, tag), nil
+	return NewClient(&ethBackend{ec}, contract), nil
 }
 
 // NewClient wraps an existing backend.
-func NewClient(backend ChainBackend, contract common.Address, blockTag rpc.BlockNumber) *Client {
-	return &Client{backend: backend, contract: contract, blockTag: blockTag, timeout: DefaultFetchTimeout}
+func NewClient(backend ChainBackend, contract common.Address) *Client {
+	return &Client{backend: backend, contract: contract, timeout: DefaultFetchTimeout}
 }
 
-// Fetch resolves the block tag to a concrete block, then calls getBuilders()
-// pinned to that block's hash so the number, hash and set are consistent.
+// Fetch resolves the finalized block, then calls getBuilders() pinned to that
+// block's hash so the number, hash and set are consistent.
 func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	header, err := c.backend.HeaderByNumber(ctx, big.NewInt(c.blockTag.Int64()))
+	header, err := c.backend.HeaderByNumber(ctx, big.NewInt(readBlockTag.Int64()))
 	if err != nil {
-		return nil, fmt.Errorf("registry: resolve block tag: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrResolveBlock, err)
 	}
 	data, err := registryABI.Pack("getBuilders")
 	if err != nil {
@@ -94,15 +103,15 @@ func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 	}
 	out, err := c.backend.CallContractAtHash(ctx, ethereum.CallMsg{To: &c.contract, Data: data}, header.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("registry: eth_call getBuilders: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrCall, err)
 	}
 	if len(out) == 0 {
 		// An address with no code returns empty output rather than an error.
-		return nil, errors.New("registry: empty eth_call result; is ContractAddress correct on this network?")
+		return nil, ErrNoCode
 	}
 	var builders []Builder
 	if err := registryABI.UnpackIntoInterface(&builders, "getBuilders", out); err != nil {
-		return nil, fmt.Errorf("registry: decode getBuilders: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
 	}
 	return &Snapshot{
 		Builders:    builders,

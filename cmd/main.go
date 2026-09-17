@@ -57,9 +57,14 @@ func main() {
 	}
 
 	// Static allowlist from [[Builders]]. With [Registry] enabled this is only the
-	// bootstrap set; the syncer replaces it after the first successful read.
-	builders := make(map[common.Address]node.Builder, len(cfg.Builders))
-	for _, b := range cfg.Builders {
+	// bootstrap set, already filtered by the local Extra/Blocked policy; the syncer
+	// replaces it after the first successful read.
+	static := cfg.Builders
+	if cfg.Registry.Enabled {
+		static = registry.Bootstrap(&cfg.Registry, cfg.Builders)
+	}
+	builders := make(map[common.Address]node.Builder, len(static))
+	for _, b := range static {
 		builders[b.Address] = node.NewBuilder(b)
 	}
 	builderSet := service.NewBuilderSet(builders)
@@ -68,15 +73,14 @@ func main() {
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	defer cancelRoot()
 	if cfg.Registry.Enabled {
-		reader, err := registry.Dial(rootCtx, cfg.Registry.RPCURL, cfg.Registry.ContractAddress, cfg.Registry.BlockTag)
+		reader, err := registry.Dial(rootCtx, cfg.Registry.RPCURL, cfg.Registry.ContractAddress)
 		if err != nil {
 			panic(err)
 		}
 		log.Infow("registry sync enabled",
 			"contract", cfg.Registry.ContractAddress,
 			"rpc", cfg.Registry.RPCURL,
-			"blockTag", cfg.Registry.BlockTag,
-			"pollInterval", time.Duration(cfg.Registry.PollInterval).String(),
+			"pollInterval", cfg.Registry.EffectivePollInterval().String(),
 			"extra", len(cfg.Registry.ExtraBuilders),
 			"blocked", len(cfg.Registry.BlockedBuilders))
 		go registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
