@@ -23,7 +23,7 @@ const (
 // Effective allowlist:
 //
 //	(registry set, or the static [[Builders]] until the first successful read)
-//	∪ ExtraBuilders − BlockedBuilders
+//	∪ ExtraBuilders
 type Config struct {
 	// Enabled turns on periodic synchronization. When false the static
 	// [[Builders]] list is used exactly as before.
@@ -38,8 +38,6 @@ type Config struct {
 	PollInterval service.Duration
 	// ExtraBuilders are always accepted in addition to the registry set.
 	ExtraBuilders []node.BuilderConfig
-	// BlockedBuilders are always rejected, even if present in the registry.
-	BlockedBuilders []common.Address
 }
 
 func (c *Config) Validate() error {

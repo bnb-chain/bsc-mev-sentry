@@ -45,26 +45,27 @@ func TestFingerprint_OrderIndependentAndContentSensitive(t *testing.T) {
 	require.NotEqual(t, Fingerprint(nil), Fingerprint(x))
 }
 
-func TestMerge_ExtraAndBlocked(t *testing.T) {
+func TestMerge_ExtraBuildersPreserveRegistryEntries(t *testing.T) {
 	base := []Builder{b(a1, "r1", "n"), b(a2, "r2", "n"), b(a3, "r3", "n")}
 	extra := []node.BuilderConfig{
 		{Address: a4, URL: "x4"}, // new: added
 		{Address: a1, URL: "x1"}, // already in registry: registry URL wins
-		{Address: a3, URL: "x3"}, // blocked below: must not resurrect
+		{Address: a3, URL: "x3"}, // overlapping key: registry URL wins
 	}
-	blocked := []common.Address{a2, a3}
 
-	got := Merge(base, extra, blocked)
+	got := Merge(base, extra)
 
 	require.Equal(t, []node.BuilderConfig{
 		{Address: a1, URL: "r1"},
+		{Address: a2, URL: "r2"},
+		{Address: a3, URL: "r3"},
 		{Address: a4, URL: "x4"},
 	}, got)
 }
 
 func TestMerge_EmptyInputs(t *testing.T) {
-	require.Empty(t, Merge(nil, nil, nil))
-	require.Equal(t, []node.BuilderConfig{{Address: a1, URL: "x"}}, Merge(nil, []node.BuilderConfig{{Address: a1, URL: "x"}}, nil))
+	require.Empty(t, Merge(nil, nil))
+	require.Equal(t, []node.BuilderConfig{{Address: a1, URL: "x"}}, Merge(nil, []node.BuilderConfig{{Address: a1, URL: "x"}}))
 }
 
 func TestDiff(t *testing.T) {
@@ -320,11 +321,10 @@ func TestSyncer_EmptyRegistryBeforeAnySuccessReplacesStatic(t *testing.T) {
 	require.Equal(t, 0, set.Len(), "static bootstrap set is superseded by the (empty) registry")
 }
 
-// Local policy must hold from process start, not only after the first sync.
-func TestBootstrap_AppliesExtraAndBlockedToStaticSet(t *testing.T) {
+// Local additions must be accepted from process start, not only after the first sync.
+func TestBootstrap_AddsExtraBuildersToStaticSet(t *testing.T) {
 	cfg := Config{
-		ExtraBuilders:   []node.BuilderConfig{{Address: a3, URL: "mine"}},
-		BlockedBuilders: []common.Address{a2},
+		ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}},
 	}
 	static := []node.BuilderConfig{{Address: a1, URL: "s1"}, {Address: a2, URL: "s2"}}
 
@@ -332,8 +332,9 @@ func TestBootstrap_AppliesExtraAndBlockedToStaticSet(t *testing.T) {
 
 	require.Equal(t, []node.BuilderConfig{
 		{Address: a1, URL: "s1"},
+		{Address: a2, URL: "s2"},
 		{Address: a3, URL: "mine"},
-	}, got, "blocked a2 removed, extra a3 added, before any registry read")
+	}, got, "static builders retained and extra a3 added before any registry read")
 }
 
 func TestSyncer_UnchangedFingerprintDoesNotRebuild(t *testing.T) {
@@ -348,17 +349,16 @@ func TestSyncer_UnchangedFingerprintDoesNotRebuild(t *testing.T) {
 	require.Same(t, before, after, "same fingerprint must not touch the allowlist")
 }
 
-func TestSyncer_AppliesExtraAndBlocked(t *testing.T) {
+func TestSyncer_AddsExtraBuilders(t *testing.T) {
 	cfg := Config{
-		ExtraBuilders:   []node.BuilderConfig{{Address: a3, URL: "mine"}},
-		BlockedBuilders: []common.Address{a2},
+		ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}},
 	}
 	reader := &fakeReader{snaps: []*Snapshot{snapOf(1, b(a1, "u1", "n"), b(a2, "u2", "n"))}}
 	s, set, state := newSyncer(reader, cfg, nil)
 
 	require.Equal(t, ResultApplied, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a1: true, a3: true}, addrs(set))
-	require.Equal(t, 2, state.Snapshot().BuilderCount, "status reports the effective count, not the raw registry count")
+	require.Equal(t, map[common.Address]bool{a1: true, a2: true, a3: true}, addrs(set))
+	require.Equal(t, 3, state.Snapshot().BuilderCount, "status reports the effective count, not the raw registry count")
 }
 
 func TestSyncer_ChangeReplacesOnlyChangedBuilders(t *testing.T) {

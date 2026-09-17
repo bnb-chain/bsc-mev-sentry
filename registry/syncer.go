@@ -33,7 +33,6 @@ type Syncer struct {
 	reader   Reader
 	interval time.Duration
 	extra    []node.BuilderConfig
-	blocked  []common.Address
 	contract common.Address
 
 	builders *service.BuilderSet
@@ -48,7 +47,6 @@ func NewSyncer(cfg *Config, reader Reader, builders *service.BuilderSet, status 
 		reader:   reader,
 		interval: cfg.pollInterval(),
 		extra:    cfg.ExtraBuilders,
-		blocked:  cfg.BlockedBuilders,
 		contract: cfg.ContractAddress,
 		builders: builders,
 		status:   status,
@@ -86,7 +84,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) Result {
 		return s.record(ResultUnchanged)
 	}
 
-	effective := Merge(snap.Builders, s.extra, s.blocked)
+	effective := Merge(snap.Builders, s.extra)
 	s.builders.Replace(effective)
 
 	var prev []Builder
