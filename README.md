@@ -76,7 +76,6 @@ Enabled = true
 ContractAddress = "0x..."            # registry proxy address on this network
 RPCURL = "http://<validator-node>:8545"  # your own node; a third-party RPC could serve a forged set
 PollInterval = "15s"
-BlockedBuilders = ["0x..."]          # always rejected, even if present in the registry
 
 [[Registry.ExtraBuilders]]           # always accepted in addition to the registry set
 Address = "0x..."
@@ -86,7 +85,7 @@ URL = "http://my-builder"
 Behavior:
 
 - Effective allowlist = (registry set, or the static `[[Builders]]` until the first successful read)
-  ∪ `ExtraBuilders` − `BlockedBuilders`.
+  ∪ `ExtraBuilders`.
 - Every `PollInterval` the sentry reads `getBuilders()` at the finalized block, so an applied change
   is never rolled back by a reorg; a registry update becomes visible one poll after it is finalized.
   If the set changed it is swapped
@@ -96,9 +95,8 @@ Behavior:
   takes effect (the allowlist then contains only `ExtraBuilders`); this is logged as a warning and
   counted under `result="empty"`. A misconfigured `ContractAddress` does not look like an empty
   registry: it fails with `no_code_at_address` and keeps the previous set.
-- Before the first successful read, the static `[[Builders]]` list is served with the same
-  `ExtraBuilders` / `BlockedBuilders` policy applied, so a locally blocked key is rejected from
-  process start.
+- Before the first successful read, the static `[[Builders]]` list is combined with
+  `ExtraBuilders`, so local additions are accepted from process start.
 - A builder whose issue-reporting URL cannot be dialed is still allowlisted; the connection is retried
   on the next `mev_reportIssue`.
 

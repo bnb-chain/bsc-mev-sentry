@@ -57,7 +57,7 @@ func main() {
 	}
 
 	// Static allowlist from [[Builders]]. With [Registry] enabled this is only the
-	// bootstrap set, already filtered by the local Extra/Blocked policy; the syncer
+	// bootstrap set, including local ExtraBuilders; the syncer
 	// replaces it after the first successful read.
 	static := cfg.Builders
 	if cfg.Registry.Enabled {
@@ -81,8 +81,7 @@ func main() {
 			"contract", cfg.Registry.ContractAddress,
 			"rpc", cfg.Registry.RPCURL,
 			"pollInterval", cfg.Registry.EffectivePollInterval().String(),
-			"extra", len(cfg.Registry.ExtraBuilders),
-			"blocked", len(cfg.Registry.BlockedBuilders))
+			"extra", len(cfg.Registry.ExtraBuilders))
 		go registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
 	}
 

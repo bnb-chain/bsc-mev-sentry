@@ -49,25 +49,15 @@ func Fingerprint(builders []Builder) common.Hash {
 	return crypto.Keccak256Hash(buf.Bytes())
 }
 
-// Merge derives the effective allowlist from a registry set plus local policy:
-// every registry entry, plus ExtraBuilders not already present, minus
-// BlockedBuilders. The result is sorted by address so callers can diff it.
-func Merge(base []Builder, extra []node.BuilderConfig, blocked []common.Address) []node.BuilderConfig {
-	deny := make(map[common.Address]struct{}, len(blocked))
-	for _, a := range blocked {
-		deny[a] = struct{}{}
-	}
+// Merge derives the effective allowlist from every registry entry plus
+// ExtraBuilders not already present. The result is sorted by address so callers
+// can diff it.
+func Merge(base []Builder, extra []node.BuilderConfig) []node.BuilderConfig {
 	out := make(map[common.Address]node.BuilderConfig, len(base)+len(extra))
 	for _, b := range base {
-		if _, blockedAddr := deny[b.Addr]; blockedAddr {
-			continue
-		}
 		out[b.Addr] = node.BuilderConfig{Address: b.Addr, URL: b.URL}
 	}
 	for _, e := range extra {
-		if _, blockedAddr := deny[e.Address]; blockedAddr {
-			continue
-		}
 		if _, exists := out[e.Address]; exists {
 			continue // registry entry wins over the local copy
 		}
@@ -84,15 +74,14 @@ func Merge(base []Builder, extra []node.BuilderConfig, blocked []common.Address)
 }
 
 // Bootstrap derives the allowlist to serve before the first successful registry
-// read: the static [[Builders]] with the same local policy (ExtraBuilders,
-// BlockedBuilders) that later applies to registry snapshots. Without this a
-// locally blocked key would pass until the first sync succeeds.
+// read: the static [[Builders]] plus ExtraBuilders, so local additions are
+// accepted from process start.
 func Bootstrap(cfg *Config, static []node.BuilderConfig) []node.BuilderConfig {
 	base := make([]Builder, 0, len(static))
 	for _, s := range static {
 		base = append(base, Builder{Addr: s.Address, URL: s.URL})
 	}
-	return Merge(base, cfg.ExtraBuilders, cfg.BlockedBuilders)
+	return Merge(base, cfg.ExtraBuilders)
 }
 
 // Diff returns addresses present in next but not prev, and vice versa.
