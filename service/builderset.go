@@ -79,8 +79,10 @@ type RegistryStatus struct {
 	FetchedAt    time.Time      `json:"fetchedAt,omitempty"`
 	Fingerprint  common.Hash    `json:"fingerprint,omitempty"`
 	BuilderCount int            `json:"builderCount"`
-	LastError    string         `json:"lastError,omitempty"`
-	LastErrorAt  time.Time      `json:"lastErrorAt,omitempty"`
+	// LastError is a short class such as "eth_call_failed", never the raw error:
+	// raw RPC errors embed the node URL, which must not reach builders.
+	LastError   string    `json:"lastError,omitempty"`
+	LastErrorAt time.Time `json:"lastErrorAt,omitempty"`
 }
 
 // RegistryState holds the mutable status behind RegistryStatus. Like BuilderSet
@@ -114,10 +116,12 @@ func (r *RegistryState) RecordSuccess(block uint64, hash common.Hash, at time.Ti
 	r.st.LastErrorAt = time.Time{}
 }
 
-func (r *RegistryState) RecordError(err error) {
+// RecordError stores an error class (see registry.ErrorClass). Callers must not
+// pass raw error text.
+func (r *RegistryState) RecordError(class string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.st.LastError = err.Error()
+	r.st.LastError = class
 	r.st.LastErrorAt = time.Now()
 }
 

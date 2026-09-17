@@ -4,11 +4,9 @@ package registry
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
@@ -16,7 +14,6 @@ import (
 
 const (
 	DefaultPollInterval = 15 * time.Second
-	DefaultBlockTag     = "finalized"
 	// DefaultFetchTimeout bounds one registry read (header + eth_call).
 	DefaultFetchTimeout = 10 * time.Second
 )
@@ -36,10 +33,9 @@ type Config struct {
 	// RPCURL is the node used for eth_call. It should be the validator's own
 	// node: a third-party RPC could serve a forged builder set.
 	RPCURL string
-	// PollInterval between reads. Zero uses DefaultPollInterval.
+	// PollInterval between reads. Zero uses DefaultPollInterval. Reads are always
+	// taken at the finalized block, so a change is visible one poll after finality.
 	PollInterval service.Duration
-	// BlockTag is "finalized" (default), "safe" or "latest".
-	BlockTag string
 	// ExtraBuilders are always accepted in addition to the registry set.
 	ExtraBuilders []node.BuilderConfig
 	// BlockedBuilders are always rejected, even if present in the registry.
@@ -56,9 +52,6 @@ func (c *Config) Validate() error {
 	if c.RPCURL == "" {
 		return errors.New("registry: RPCURL is required")
 	}
-	if _, err := ParseBlockTag(c.blockTag()); err != nil {
-		return err
-	}
 	if c.PollInterval < 0 {
 		return errors.New("registry: PollInterval must be positive")
 	}
@@ -72,23 +65,5 @@ func (c *Config) pollInterval() time.Duration {
 	return time.Duration(c.PollInterval)
 }
 
-func (c *Config) blockTag() string {
-	if c.BlockTag == "" {
-		return DefaultBlockTag
-	}
-	return c.BlockTag
-}
-
-// ParseBlockTag accepts "latest", "safe" and "finalized".
-func ParseBlockTag(tag string) (rpc.BlockNumber, error) {
-	switch tag {
-	case "latest":
-		return rpc.LatestBlockNumber, nil
-	case "safe":
-		return rpc.SafeBlockNumber, nil
-	case "finalized":
-		return rpc.FinalizedBlockNumber, nil
-	default:
-		return 0, fmt.Errorf("registry: unsupported BlockTag %q (want latest, safe or finalized)", tag)
-	}
-}
+// EffectivePollInterval is PollInterval with the default applied.
+func (c *Config) EffectivePollInterval() time.Duration { return c.pollInterval() }
