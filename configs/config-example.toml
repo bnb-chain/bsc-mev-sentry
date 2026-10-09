@@ -10,6 +10,7 @@ RPCTimeout = "10s" # Total RPC timeout. gRPC uses 10s when omitted.
 
 [[Validators]]
 PrivateURL = "http://10.200.31.36:8545"
+GRPCURL = "10.200.31.36:8552" # host:port, no http://
 PublicHostName = "bsc-testnet-elbrus.bnbchain.org"
 PayAccountMode = "privateKey"
 PrivateKey = "b1fed931ad50...34796ddbee68a53cf"

@@ -50,6 +50,8 @@ var (
 type Validator interface {
 	SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error)
 	SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error)
+	// SendBidBlockRLP forwards over gRPC; it returns ErrGRPCNotConfigured without GRPCURL.
+	SendBidBlockRLP(ctx context.Context, bidBlockRLP, signature []byte, builder common.Address, bidHash common.Hash) (common.Hash, error)
 	GetBidBlockPermission(ctx context.Context, builder common.Address) (*ethclient.BidBlockPermission, error)
 	MevRunning() bool
 	HasBuilder(ctx context.Context, builder common.Address) (bool, error)
@@ -60,7 +62,9 @@ type Validator interface {
 }
 
 type ValidatorConfig struct {
-	PrivateURL     string
+	PrivateURL string
+	// GRPCURL is the validator's BidBlockService address; empty rejects gRPC BidBlocks.
+	GRPCURL        string
 	PublicHostName string
 
 	PayAccountMode account.Mode
@@ -81,6 +85,14 @@ func NewValidator(config ValidatorConfig) Validator {
 		return nil
 	}
 
+	var grpcClient *bidBlockGRPCClient
+	if config.GRPCURL != "" {
+		if grpcClient, err = newBidBlockGRPCClient(config.GRPCURL); err != nil {
+			log.Errorw("failed to dial validator gRPC", "url", config.GRPCURL, "err", err)
+			return nil
+		}
+	}
+
 	acc, err := account.New(&account.Config{
 		Mode:             config.PayAccountMode,
 		PrivateKey:       config.PrivateKey,
@@ -94,6 +106,7 @@ func NewValidator(config ValidatorConfig) Validator {
 	v := &validator{
 		cfg:        config,
 		client:     cli,
+		grpc:       grpcClient,
 		scheduler:  gocron.NewScheduler(time.UTC),
 		payAccount: acc,
 	}
@@ -112,6 +125,7 @@ func NewValidator(config ValidatorConfig) Validator {
 type validator struct {
 	cfg        ValidatorConfig
 	client     *ethclient.Client
+	grpc       *bidBlockGRPCClient // nil without GRPCURL
 	payAccount account.Account
 
 	scheduler         *gocron.Scheduler
@@ -155,6 +169,28 @@ func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlock
 	}
 	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder,
 		"bidHash", bidHash.TerminalString(), "elapsedUs", time.Since(start).Microseconds())
+
+	return hash, err
+}
+
+func (n *validator) SendBidBlockRLP(ctx context.Context, bidBlockRLP, signature []byte, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	if n.grpc == nil {
+		return common.Hash{}, ErrGRPCNotConfigured
+	}
+	log.Debugw("[BID BLOCK GRPC FORWARD]", "target", n.cfg.GRPCURL, "builder", builder,
+		"bidHash", bidHash.TerminalString(), "payloadBytes", len(bidBlockRLP))
+	start := time.Now()
+	hash, err := n.grpc.SendBidBlock(ctx, bidBlockRLP, signature)
+	if err != nil {
+		metrics.ChainError.Inc()
+		log.Errorw("failed to send bid block over gRPC",
+			"builder", builder,
+			"bidHash", bidHash.TerminalString(),
+			"err", err)
+		err = fromGRPCStatus(err)
+	}
+	log.Debugw("[BID BLOCK GRPC RESP]", "builder", builder, "bidHash", bidHash.TerminalString(),
+		"payloadBytes", len(bidBlockRLP), "elapsedUs", time.Since(start).Microseconds())
 
 	return hash, err
 }

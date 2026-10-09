@@ -19,14 +19,15 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/tap"
 
+	"github.com/bnb-chain/bsc-mev-sentry/log"
+	"github.com/bnb-chain/bsc-mev-sentry/metrics"
+	"github.com/bnb-chain/bsc-mev-sentry/node"
+
 	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
+	"github.com/ethereum/go-ethereum/core/types/builder/mevpb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
-
-	"github.com/bnb-chain/bsc-mev-sentry/log"
-	"github.com/bnb-chain/bsc-mev-sentry/metrics"
-	"github.com/ethereum/go-ethereum/core/types/builder/mevpb"
 )
 
 const (
@@ -110,7 +111,7 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		ValidatorHostName: host,
 	}
 
-	bidHash, err := b.sentry.sendBidBlock(ctx, args)
+	bidHash, err := b.sentry.sendBidBlock(ctx, args, req.BidBlockRlp)
 	if err != nil {
 		return nil, err // raw business error; the defer above converts + counts
 	}
@@ -137,6 +138,9 @@ func toGRPCStatus(err error) error {
 	}
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, err.Error())
+	}
+	if errors.Is(err, node.ErrGRPCNotConfigured) {
+		return status.Error(codes.Unavailable, err.Error())
 	}
 
 	var rpcErr rpc.Error

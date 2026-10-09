@@ -150,7 +150,7 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
-	bidHash, err = s.sendBidBlock(ctx, args)
+	bidHash, err = s.sendBidBlock(ctx, args, nil)
 	if err == nil {
 		log.Debugw("[BID BLOCK JSON]",
 			"block", args.BidBlock.Header.Number,
@@ -163,8 +163,9 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	return bidHash, err
 }
 
-// sendBidBlock is shared by JSON-RPC and gRPC.
-func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper) (bidHash common.Hash, err error) {
+// sendBidBlock is shared by JSON-RPC and gRPC. Each ingress forwards over its own
+// transport: a non-nil bidBlockRLP is relayed to the validator over gRPC as is.
+func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper, bidBlockRLP []byte) (bidHash common.Hash, err error) {
 	if args.BidBlock == nil || args.BidBlock.Header == nil {
 		log.Errorw("empty bid block or header")
 		err = buildertypes.NewInvalidBidError("empty BidBlock or Header")
@@ -189,6 +190,9 @@ func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 	}
 
 	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
+	if bidBlockRLP != nil {
+		return validator.SendBidBlockRLP(ctx, bidBlockRLP, args.Signature, builder, signingHash)
+	}
 	return validator.SendBidBlock(ctx, args.BidBlockArgs, builder, signingHash)
 }
 
