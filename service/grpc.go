@@ -100,7 +100,8 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		log.Errorw("failed to decode bid block rlp", "err", err)
 		return nil, buildertypes.NewInvalidBidError("invalid BidBlock rlp")
 	}
-	decodeElapsed := time.Since(decodeStart)
+	rlpElapsed := time.Since(decodeStart)
+	protoElapsed := protoDecodeElapsed(ctx)
 
 	args := BidBlockArgsWrapper{
 		BidBlockArgs: buildertypes.BidBlockArgs{
@@ -110,7 +111,9 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		ValidatorHostName: host,
 	}
 
+	businessStart := time.Now()
 	bidHash, err := b.sentry.sendBidBlock(ctx, args)
+	businessElapsed := time.Since(businessStart)
 	if err != nil {
 		return nil, err // raw business error; the defer above converts + counts
 	}
@@ -122,7 +125,10 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		"sidecars", len(bidBlock.Sidecars),
 		"txBytes", bidBlockTxBytes(&bidBlock),
 		"payloadBytes", len(req.BidBlockRlp),
-		"decodeUs", decodeElapsed.Microseconds(),
+		"decodeUs", (protoElapsed + rlpElapsed).Microseconds(),
+		"protoDecodeUs", protoElapsed.Microseconds(),
+		"rlpDecodeUs", rlpElapsed.Microseconds(),
+		"businessUs", businessElapsed.Microseconds(),
 		"handlerUs", time.Since(start).Microseconds())
 	return &mevpb.BidBlockResponse{BidHash: bidHash.Bytes()}, nil
 }
@@ -295,7 +301,7 @@ func StartGRPCServer(addr string, sentry *MevSentry, sharedSem chan struct{}) (*
 		grpc.ChainUnaryInterceptor(recoverPanic),
 	}
 	srv := grpc.NewServer(opts...)
-	mevpb.RegisterBidBlockServiceServer(srv, &BidBlockServer{sentry: sentry})
+	srv.RegisterService(withProtoDecodeTiming(mevpb.BidBlockService_ServiceDesc), &BidBlockServer{sentry: sentry})
 
 	// Support named health probes.
 	hs := health.NewServer()

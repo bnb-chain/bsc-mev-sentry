@@ -134,6 +134,10 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 type BidBlockArgsWrapper struct {
 	buildertypes.BidBlockArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
+
+	// Set by UnmarshalJSON on the JSON-RPC path only.
+	decodeElapsed time.Duration
+	payloadBytes  int
 }
 
 // SendBidBlock forwards a BidBlock without generating a PayBidTx.
@@ -150,7 +154,9 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
+	businessStart := time.Now()
 	bidHash, err = s.sendBidBlock(ctx, args)
+	businessElapsed := time.Since(businessStart)
 	if err == nil {
 		log.Debugw("[BID BLOCK JSON]",
 			"block", args.BidBlock.Header.Number,
@@ -158,6 +164,9 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 			"txs", len(args.BidBlock.Transactions),
 			"sidecars", len(args.BidBlock.Sidecars),
 			"txBytes", bidBlockTxBytes(args.BidBlock),
+			"payloadBytes", args.payloadBytes,
+			"decodeUs", args.decodeElapsed.Microseconds(),
+			"businessUs", businessElapsed.Microseconds(),
 			"handlerUs", time.Since(start).Microseconds())
 	}
 	return bidHash, err
