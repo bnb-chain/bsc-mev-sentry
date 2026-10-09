@@ -88,7 +88,7 @@ func main() {
 		gzip.Gzip(gzip.DefaultCompression),
 	)
 
-	app.POST("/", gin.WrapH(rpcServer))
+	app.POST("/", gin.WrapH(service.RecordBodyReceived(rpcServer)))
 
 	httpServer := &http.Server{Addr: cfg.Service.HTTPListenAddr, Handler: app}
 	httpErrCh := make(chan error, 1)
