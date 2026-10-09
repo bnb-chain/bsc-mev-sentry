@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -134,11 +137,43 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 type BidBlockArgsWrapper struct {
 	buildertypes.BidBlockArgs
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
-
-	// Set by UnmarshalJSON on the JSON-RPC path only.
-	decodeElapsed time.Duration
-	payloadBytes  int
 }
+
+type bodyReceivedKey struct{}
+
+type bodyReceived struct {
+	at    time.Time
+	bytes int
+}
+
+// RecordBodyReceived buffers the request body so SendBidBlock can time decoding
+// from full receipt. The rpc server still enforces its own body limit.
+func RecordBodyReceived(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Leave requests the rpc server rejects before reading the body untouched.
+		if r.ContentLength > maxBufferedBody || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBufferedBody))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
+		// Batch calls run one after another, so a shared receipt time would
+		// charge earlier calls' processing to later calls' decoding.
+		if b := bytes.TrimLeft(body, " \t\r\n"); len(b) > 0 && b[0] == '[' {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), bodyReceivedKey{}, bodyReceived{at: time.Now(), bytes: len(body)})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Matches the rpc server's default body limit; any excess is left for it to reject.
+const maxBufferedBody = 5 * 1024 * 1024
 
 // SendBidBlock forwards a BidBlock without generating a PayBidTx.
 func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) (bidHash common.Hash, err error) {
@@ -154,9 +189,13 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
-	businessStart := time.Now()
+	// -1 marks requests without a receipt time (batch or unbuffered).
+	decodeUs, payloadBytes := int64(-1), -1
+	if received, ok := ctx.Value(bodyReceivedKey{}).(bodyReceived); ok {
+		decodeUs, payloadBytes = start.Sub(received.at).Microseconds(), received.bytes
+	}
+
 	bidHash, err = s.sendBidBlock(ctx, args)
-	businessElapsed := time.Since(businessStart)
 	if err == nil {
 		log.Debugw("[BID BLOCK JSON]",
 			"block", args.BidBlock.Header.Number,
@@ -164,9 +203,8 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 			"txs", len(args.BidBlock.Transactions),
 			"sidecars", len(args.BidBlock.Sidecars),
 			"txBytes", bidBlockTxBytes(args.BidBlock),
-			"payloadBytes", args.payloadBytes,
-			"decodeUs", args.decodeElapsed.Microseconds(),
-			"businessUs", businessElapsed.Microseconds(),
+			"payloadBytes", payloadBytes,
+			"decodeUs", decodeUs,
 			"handlerUs", time.Since(start).Microseconds())
 	}
 	return bidHash, err

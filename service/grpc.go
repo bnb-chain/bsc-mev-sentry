@@ -18,6 +18,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/tap"
+	"google.golang.org/protobuf/proto"
 
 	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 	"github.com/ethereum/go-ethereum/params"
@@ -95,13 +96,15 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 	}
 
 	var bidBlock buildertypes.BidBlock
-	decodeStart := time.Now()
+	decodeStart, ok := ctx.Value(decodeStartKey{}).(time.Time)
+	if !ok {
+		decodeStart = time.Now()
+	}
 	if err := rlp.DecodeBytes(req.BidBlockRlp, &bidBlock); err != nil {
 		log.Errorw("failed to decode bid block rlp", "err", err)
 		return nil, buildertypes.NewInvalidBidError("invalid BidBlock rlp")
 	}
-	rlpElapsed := time.Since(decodeStart)
-	protoElapsed := protoDecodeElapsed(ctx)
+	decodeElapsed := time.Since(decodeStart)
 
 	args := BidBlockArgsWrapper{
 		BidBlockArgs: buildertypes.BidBlockArgs{
@@ -111,9 +114,7 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		ValidatorHostName: host,
 	}
 
-	businessStart := time.Now()
 	bidHash, err := b.sentry.sendBidBlock(ctx, args)
-	businessElapsed := time.Since(businessStart)
 	if err != nil {
 		return nil, err // raw business error; the defer above converts + counts
 	}
@@ -124,13 +125,27 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		"txs", len(bidBlock.Transactions),
 		"sidecars", len(bidBlock.Sidecars),
 		"txBytes", bidBlockTxBytes(&bidBlock),
-		"payloadBytes", len(req.BidBlockRlp),
-		"decodeUs", (protoElapsed + rlpElapsed).Microseconds(),
-		"protoDecodeUs", protoElapsed.Microseconds(),
-		"rlpDecodeUs", rlpElapsed.Microseconds(),
-		"businessUs", businessElapsed.Microseconds(),
+		"payloadBytes", proto.Size(req),
+		"decodeUs", decodeElapsed.Microseconds(),
 		"handlerUs", time.Since(start).Microseconds())
 	return &mevpb.BidBlockResponse{BidHash: bidHash.Bytes()}, nil
+}
+
+type decodeStartKey struct{}
+
+// withDecodeStart stamps the request context when grpc-go enters a method
+// handler; the message is fully received and the handler unmarshals it first.
+func withDecodeStart(desc grpc.ServiceDesc) *grpc.ServiceDesc {
+	methods := make([]grpc.MethodDesc, len(desc.Methods))
+	for i, m := range desc.Methods {
+		handler := m.Handler
+		m.Handler = func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			return handler(srv, context.WithValue(ctx, decodeStartKey{}, time.Now()), dec, interceptor)
+		}
+		methods[i] = m
+	}
+	desc.Methods = methods
+	return &desc
 }
 
 // toGRPCStatus maps MEV errors and preserves their code in ErrorInfo.
@@ -301,7 +316,7 @@ func StartGRPCServer(addr string, sentry *MevSentry, sharedSem chan struct{}) (*
 		grpc.ChainUnaryInterceptor(recoverPanic),
 	}
 	srv := grpc.NewServer(opts...)
-	srv.RegisterService(withProtoDecodeTiming(mevpb.BidBlockService_ServiceDesc), &BidBlockServer{sentry: sentry})
+	srv.RegisterService(withDecodeStart(mevpb.BidBlockService_ServiceDesc), &BidBlockServer{sentry: sentry})
 
 	// Support named health probes.
 	hs := health.NewServer()

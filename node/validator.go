@@ -140,9 +140,7 @@ func (n *validator) SendBid(ctx context.Context, args buildertypes.BidArgs, buil
 
 func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
 	start := time.Now()
-	var hash common.Hash
-	encode := new(encodeStats)
-	err := n.client.Client().CallContext(ctx, &hash, "mev_sendBidBlock", measuredBidBlockArgs{args: args, stats: encode})
+	hash, err := n.client.SendBidBlock(ctx, args)
 	if err != nil {
 		metrics.ChainError.Inc()
 		log.Errorw("failed to send bid block",
@@ -156,12 +154,8 @@ func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlock
 		}
 	}
 	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder,
-		"bidHash", bidHash.TerminalString(), "requestBytes", encode.bytes,
-		"encodeUs", encode.elapsed.Microseconds(), "elapsedUs", time.Since(start).Microseconds())
+		"bidHash", bidHash.TerminalString(), "elapsedUs", time.Since(start).Microseconds())
 
-	if err != nil {
-		return common.Hash{}, err
-	}
 	return hash, err
 }
 
