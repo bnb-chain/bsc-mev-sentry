@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -136,6 +139,37 @@ type BidBlockArgsWrapper struct {
 	ValidatorHostName string `json:"validatorHostName,omitempty"`
 }
 
+type bodyReceivedKey struct{}
+
+type bodyReceived struct {
+	at    time.Time
+	bytes int
+}
+
+// RecordBodyReceived buffers the request body so SendBidBlock can time decoding
+// from full receipt. The rpc server still enforces its own body limit.
+func RecordBodyReceived(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBufferedBody))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		// Batch calls run one after another, so a shared receipt time would
+		// charge earlier calls' processing to later calls' decoding.
+		if b := bytes.TrimLeft(body, " \t\r\n"); len(b) > 0 && b[0] == '[' {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), bodyReceivedKey{}, bodyReceived{at: time.Now(), bytes: len(body)})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Matches the rpc server's default body limit, which reads no further either.
+const maxBufferedBody = 5 * 1024 * 1024
+
 // SendBidBlock forwards a BidBlock without generating a PayBidTx.
 func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) (bidHash common.Hash, err error) {
 	method := "mev_sendBidBlock"
@@ -150,6 +184,12 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 		}
 	}()
 
+	// -1 marks requests without a receipt time (batch or unbuffered).
+	decodeUs, payloadBytes := int64(-1), -1
+	if received, ok := ctx.Value(bodyReceivedKey{}).(bodyReceived); ok {
+		decodeUs, payloadBytes = start.Sub(received.at).Microseconds(), received.bytes
+	}
+
 	bidHash, err = s.sendBidBlock(ctx, args, nil)
 	if err == nil {
 		log.Debugw("[BID BLOCK JSON]",
@@ -158,6 +198,8 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 			"txs", len(args.BidBlock.Transactions),
 			"sidecars", len(args.BidBlock.Sidecars),
 			"txBytes", bidBlockTxBytes(args.BidBlock),
+			"payloadBytes", payloadBytes,
+			"decodeUs", decodeUs,
 			"handlerUs", time.Since(start).Microseconds())
 	}
 	return bidHash, err

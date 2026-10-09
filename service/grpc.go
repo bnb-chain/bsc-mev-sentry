@@ -18,6 +18,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/tap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bnb-chain/bsc-mev-sentry/log"
 	"github.com/bnb-chain/bsc-mev-sentry/metrics"
@@ -96,7 +97,10 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 	}
 
 	var bidBlock buildertypes.BidBlock
-	decodeStart := time.Now()
+	decodeStart, ok := ctx.Value(decodeStartKey{}).(time.Time)
+	if !ok {
+		decodeStart = time.Now()
+	}
 	if err := rlp.DecodeBytes(req.BidBlockRlp, &bidBlock); err != nil {
 		log.Errorw("failed to decode bid block rlp", "err", err)
 		return nil, buildertypes.NewInvalidBidError("invalid BidBlock rlp")
@@ -122,10 +126,27 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		"txs", len(bidBlock.Transactions),
 		"sidecars", len(bidBlock.Sidecars),
 		"txBytes", bidBlockTxBytes(&bidBlock),
-		"payloadBytes", len(req.BidBlockRlp),
+		"payloadBytes", proto.Size(req),
 		"decodeUs", decodeElapsed.Microseconds(),
 		"handlerUs", time.Since(start).Microseconds())
 	return &mevpb.BidBlockResponse{BidHash: bidHash.Bytes()}, nil
+}
+
+type decodeStartKey struct{}
+
+// withDecodeStart stamps the request context when grpc-go enters a method
+// handler; the message is fully received and the handler unmarshals it first.
+func withDecodeStart(desc grpc.ServiceDesc) *grpc.ServiceDesc {
+	methods := make([]grpc.MethodDesc, len(desc.Methods))
+	for i, m := range desc.Methods {
+		handler := m.Handler
+		m.Handler = func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			return handler(srv, context.WithValue(ctx, decodeStartKey{}, time.Now()), dec, interceptor)
+		}
+		methods[i] = m
+	}
+	desc.Methods = methods
+	return &desc
 }
 
 // toGRPCStatus maps MEV errors and preserves their code in ErrorInfo.
@@ -299,7 +320,7 @@ func StartGRPCServer(addr string, sentry *MevSentry, sharedSem chan struct{}) (*
 		grpc.ChainUnaryInterceptor(recoverPanic),
 	}
 	srv := grpc.NewServer(opts...)
-	mevpb.RegisterBidBlockServiceServer(srv, &BidBlockServer{sentry: sentry})
+	srv.RegisterService(withDecodeStart(mevpb.BidBlockService_ServiceDesc), &BidBlockServer{sentry: sentry})
 
 	// Support named health probes.
 	hs := health.NewServer()
