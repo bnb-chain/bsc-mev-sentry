@@ -9,14 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
-	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
-	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -27,7 +19,16 @@ import (
 	"google.golang.org/grpc/tap"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 	"github.com/ethereum/go-ethereum/core/types/builder/mevpb"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func sampleBidBlock() *buildertypes.BidBlock {
@@ -106,13 +107,16 @@ func TestBidBlockSidecarRLPRoundtrip(t *testing.T) {
 
 // mockValidator captures forwarded BidBlock arguments.
 type mockValidator struct {
-	gotArgs    buildertypes.BidBlockArgs
 	gotBuilder common.Address
 	gotHash    common.Hash
 }
 
-func (m *mockValidator) SendBidBlock(_ context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
-	m.gotArgs, m.gotBuilder, m.gotHash = args, builder, bidHash
+func (m *mockValidator) SendBidBlock(_ context.Context, _ buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	m.gotBuilder, m.gotHash = builder, bidHash
+	return bidHash, nil
+}
+func (m *mockValidator) SendBidBlockRLP(_ context.Context, _, _ []byte, builder common.Address, bidHash common.Hash) (common.Hash, error) {
+	m.gotBuilder, m.gotHash = builder, bidHash
 	return bidHash, nil
 }
 func (m *mockValidator) SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error) {
@@ -176,10 +180,6 @@ func TestGRPCIngressMatchesJSONPath(t *testing.T) {
 	require.Equal(t, common.BytesToHash(resp.BidHash), jsonVal.gotHash)
 	require.Equal(t, jsonVal.gotBuilder, grpcVal.gotBuilder)
 	require.Equal(t, builderAddr, grpcVal.gotBuilder)
-	require.Equal(t, jsonVal.gotArgs.Signature, grpcVal.gotArgs.Signature)
-	require.Equal(t, jsonVal.gotArgs.BidBlock.Transactions, grpcVal.gotArgs.BidBlock.Transactions)
-	require.Equal(t, jsonVal.gotArgs.BidBlock.Sidecars, grpcVal.gotArgs.BidBlock.Sidecars)
-	require.Equal(t, jsonVal.gotArgs.BidBlock.Header.Hash(), grpcVal.gotArgs.BidBlock.Header.Hash())
 }
 
 // wireError mimics the *rpc.jsonError the ethclient returns for validator errors
@@ -334,7 +334,7 @@ func TestStartGRPCServerEndToEnd(t *testing.T) {
 // panicValidator panics during forwarding.
 type panicValidator struct{ mockValidator }
 
-func (p *panicValidator) SendBidBlock(context.Context, buildertypes.BidBlockArgs, common.Address, common.Hash) (common.Hash, error) {
+func (p *panicValidator) SendBidBlockRLP(context.Context, []byte, []byte, common.Address, common.Hash) (common.Hash, error) {
 	panic("boom")
 }
 
@@ -383,7 +383,7 @@ type blockingValidator struct {
 	release chan struct{}
 }
 
-func (b *blockingValidator) SendBidBlock(_ context.Context, _ buildertypes.BidBlockArgs, _ common.Address, bidHash common.Hash) (common.Hash, error) {
+func (b *blockingValidator) SendBidBlockRLP(_ context.Context, _, _ []byte, _ common.Address, bidHash common.Hash) (common.Hash, error) {
 	b.entered <- struct{}{}
 	<-b.release
 	return bidHash, nil
