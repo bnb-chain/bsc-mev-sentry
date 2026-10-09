@@ -150,17 +150,12 @@ type bodyReceived struct {
 // from full receipt. The rpc server still enforces its own body limit.
 func RecordBodyReceived(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Leave requests the rpc server rejects before reading the body untouched.
-		if r.ContentLength > maxBufferedBody || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			next.ServeHTTP(w, r)
-			return
-		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxBufferedBody))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		// Batch calls run one after another, so a shared receipt time would
 		// charge earlier calls' processing to later calls' decoding.
 		if b := bytes.TrimLeft(body, " \t\r\n"); len(b) > 0 && b[0] == '[' {
@@ -172,7 +167,7 @@ func RecordBodyReceived(next http.Handler) http.Handler {
 	})
 }
 
-// Matches the rpc server's default body limit; any excess is left for it to reject.
+// Matches the rpc server's default body limit, which reads no further either.
 const maxBufferedBody = 5 * 1024 * 1024
 
 // SendBidBlock forwards a BidBlock without generating a PayBidTx.
