@@ -63,3 +63,49 @@ Address = "0x980A75eC...fc9b863D5"
 URL = "http://bsc-builder-2"
 
 ```
+
+# On-chain builder registry (optional)
+
+Instead of maintaining `[[Builders]]` by hand, the sentry can synchronize its allowlist from the
+BuilderKeyRegistry contract published by the Good Will Alliance
+(`good-will-alliance/contracts/builder-key-registry`). Enable it with a `[Registry]` section:
+
+```toml
+[Registry]
+Enabled = true
+ContractAddress = "0x..."            # registry proxy address on this network
+RPCURL = "http://<validator-node>:8545"  # your own node; a third-party RPC could serve a forged set
+PollInterval = "15s"
+
+[[Registry.ExtraBuilders]]           # always accepted in addition to the registry set
+Address = "0x..."
+URL = "http://my-builder"
+```
+
+Behavior:
+
+- Effective allowlist = (registry set, or the static `[[Builders]]` until the first successful read)
+  ∪ `ExtraBuilders`.
+- Every `PollInterval` the sentry reads `getBuilders()` at the finalized block, so an applied change
+  is never rolled back by a reorg; a registry update becomes visible one poll after it is finalized.
+  If the set changed it is swapped
+  in atomically; requests never see a half-updated allowlist.
+- A failed read never changes the allowlist: the previous set stays in place and a warning is logged.
+  A successfully decoded registry is authoritative even when it is empty, so removing the last key
+  takes effect (the allowlist then contains only `ExtraBuilders`); this is logged as a warning and
+  counted under `result="empty"`. A misconfigured `ContractAddress` does not look like an empty
+  registry: it fails with `no_code_at_address` and keeps the previous set.
+- Before the first successful read, the static `[[Builders]]` list is combined with
+  `ExtraBuilders`, so local additions are accepted from process start.
+- A builder whose issue-reporting URL cannot be dialed is still allowlisted; the connection is retried
+  on the next `mev_reportIssue`.
+
+Observability:
+
+- `mev_registryStatus` (read-only RPC) returns the source (`static` or `registry`), the block number,
+  block hash, fetch time and fingerprint of the applied snapshot, the effective builder count, and the
+  class of the last error (`eth_call_failed`, `resolve_block_failed`, `no_code_at_address`,
+  `decode_failed`, `timeout`, `fetch_failed`). The full error, which may contain the
+  node URL, is only written to the sentry log. Two sentries reporting the same fingerprint hold the same set.
+- Prometheus: `bsc_mev_sentry_registry_sync_total{result}`, `bsc_mev_sentry_registry_synced_block`,
+  `bsc_mev_sentry_registry_builder_count`, `bsc_mev_sentry_registry_last_success_timestamp_seconds`.
