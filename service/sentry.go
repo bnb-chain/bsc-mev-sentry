@@ -192,7 +192,7 @@ func (s *MevSentry) SendBidBlock(ctx context.Context, args BidBlockArgsWrapper) 
 
 	bidHash, err = s.sendBidBlock(ctx, args, nil)
 	if err == nil {
-		log.Debugw("[BID BLOCK JSON]",
+		log.Infow("[BID BLOCK JSON]",
 			"block", args.BidBlock.Header.Number,
 			"hash", bidHash.TerminalString(),
 			"txs", len(args.BidBlock.Transactions),

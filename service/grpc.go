@@ -122,7 +122,7 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		return nil, err // raw business error; the defer above converts + counts
 	}
 
-	log.Debugw("[BID BLOCK GRPC]",
+	log.Infow("[BID BLOCK GRPC]",
 		"block", bidBlock.Header.Number,
 		"hash", bidHash.TerminalString(),
 		"txs", len(bidBlock.Transactions),
