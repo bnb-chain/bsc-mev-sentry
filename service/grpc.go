@@ -105,7 +105,9 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		log.Errorw("failed to decode bid block rlp", "err", err)
 		return nil, buildertypes.NewInvalidBidError("invalid BidBlock rlp")
 	}
-	decodeElapsed := time.Since(decodeStart)
+	// Match JSON-RPC: handler timing starts after decoding, without overlap.
+	handlerStart := time.Now()
+	decodeElapsed := handlerStart.Sub(decodeStart)
 
 	args := BidBlockArgsWrapper{
 		BidBlockArgs: buildertypes.BidBlockArgs{
@@ -128,7 +130,7 @@ func (b *BidBlockServer) SendBidBlock(ctx context.Context, req *mevpb.BidBlockRe
 		"txBytes", bidBlockTxBytes(&bidBlock),
 		"payloadBytes", proto.Size(req),
 		"decodeUs", decodeElapsed.Microseconds(),
-		"handlerUs", time.Since(start).Microseconds())
+		"handlerUs", time.Since(handlerStart).Microseconds())
 	return &mevpb.BidBlockResponse{BidHash: bidHash.Bytes()}, nil
 }
 
