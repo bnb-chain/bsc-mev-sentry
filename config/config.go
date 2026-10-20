@@ -71,7 +71,7 @@ type LogConfig struct {
 
 var defaultConfig = Config{
 	Debug: DebugConfig{
-		ListenAddr: ":6060",
+		ListenAddr: "127.0.0.1:6060",
 	},
 	Log: LogConfig{
 		RootDir: "./logs",
