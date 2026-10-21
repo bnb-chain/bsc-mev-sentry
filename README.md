@@ -74,8 +74,8 @@ BuilderKeyRegistry contract published by the Good Will Alliance
 [Registry]
 Enabled = true
 ContractAddress = "0x..."            # registry proxy address on this network
-RPCURL = "http://<validator-node>:8545"  # your own node; a third-party RPC could serve a forged set
 PollInterval = "15s"
+# RPCURL = "http://<trusted-node>:8545"  # optional: try this node before the validators
 
 [[Registry.ExtraBuilders]]           # always accepted in addition to the registry set
 Address = "0x..."
@@ -84,13 +84,20 @@ URL = "http://my-builder"
 
 Behavior:
 
+- No separate RPC URL is required. Each poll tries `Validators.PrivateURL` in configuration order,
+  starting with the first validator. If `Registry.RPCURL` is set, it is tried first, followed by the
+  validators. Duplicate URLs are tried only once. All sources must be trusted nodes on the same chain.
+  A dial, read, or decode failure advances to the next source; the first successful snapshot wins.
+  Each source gets up to 10 seconds for the complete attempt, so a poll can take up to 10 seconds
+  per distinct source when nodes time out. Shutdown cancels the current attempt and stops retries.
+- Both the finalized header and contract state are read from the same source.
 - Effective allowlist = (registry set, or the static `[[Builders]]` until the first successful read)
   ∪ `ExtraBuilders`.
 - Every `PollInterval` the sentry reads `getBuilders()` at the finalized block, so an applied change
   is never rolled back by a reorg; a registry update becomes visible one poll after it is finalized.
   If the set changed it is swapped
   in atomically; requests never see a half-updated allowlist.
-- A failed read never changes the allowlist: the previous set stays in place and a warning is logged.
+- If all sources fail, the previous allowlist stays in place and a warning is logged.
   A successfully decoded registry is authoritative even when it is empty, so removing the last key
   takes effect (the allowlist then contains only `ExtraBuilders`); this is logged as a warning and
   counted under `result="empty"`. A misconfigured `ContractAddress` does not look like an empty

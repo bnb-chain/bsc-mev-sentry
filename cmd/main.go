@@ -71,18 +71,25 @@ func main() {
 	registryState := service.NewRegistryState(cfg.Registry.Enabled, cfg.Registry.ContractAddress, len(builders))
 
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
-	defer cancelRoot()
+	var registryWG sync.WaitGroup
+	defer func() {
+		cancelRoot()
+		registryWG.Wait()
+	}()
 	if cfg.Registry.Enabled {
-		reader, err := registry.Dial(rootCtx, cfg.Registry.RPCURL, cfg.Registry.ContractAddress)
-		if err != nil {
-			panic(err)
-		}
+		rpcURLs := cfg.Registry.RPCURLs(cfg.Validators)
+		reader := registry.NewFallbackReader(rpcURLs, cfg.Registry.ContractAddress)
 		log.Infow("registry sync enabled",
 			"contract", cfg.Registry.ContractAddress,
-			"rpc", cfg.Registry.RPCURL,
+			"rpcSources", rpcURLs,
 			"pollInterval", cfg.Registry.EffectivePollInterval().String(),
 			"extra", len(cfg.Registry.ExtraBuilders))
-		go registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
+		registryWG.Add(1)
+		go func() {
+			defer registryWG.Done()
+			defer reader.Close()
+			registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
+		}()
 	}
 
 	rpcServer := rpc.NewServer()

@@ -44,6 +44,9 @@ func Load(file string) *Config {
 	if err := cfg.Registry.Validate(); err != nil {
 		panic(err)
 	}
+	if cfg.Registry.Enabled && len(cfg.Registry.RPCURLs(cfg.Validators)) == 0 {
+		panic("registry: configure at least one Validators.PrivateURL or Registry.RPCURL")
+	}
 	return &cfg
 }
 

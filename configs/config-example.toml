@@ -38,7 +38,10 @@ URL = "http://bsc-builder-2"
 [Registry]
 Enabled = false
 ContractAddress = "0x0000000000000000000000000000000000000000" # BuilderKeyRegistry proxy on this network.
-RPCURL = "http://10.200.31.36:8545" # Use the validator's own node, not a third-party RPC.
+# Each poll tries Validators.PrivateURL in order, starting with the first validator.
+# Optionally try another trusted node first, then fall back to the validators:
+# RPCURL = "http://10.200.31.36:8545"
+# All sources must be on the same chain. Each source attempt has a 10-second timeout.
 PollInterval = "15s" # Reads are taken at the finalized block; a change is visible one poll after finality.
 
 # Always accepted in addition to the registry set (e.g. a validator's own builder).

@@ -392,7 +392,7 @@ func TestConfig_Validate(t *testing.T) {
 	c := Config{Enabled: true}
 	require.ErrorContains(t, c.Validate(), "ContractAddress")
 	c.ContractAddress = a1
-	require.ErrorContains(t, c.Validate(), "RPCURL")
+	require.NoError(t, c.Validate(), "RPCURL is optional; validators supply the default sources")
 	c.RPCURL = "http://localhost:8545"
 	require.NoError(t, c.Validate())
 

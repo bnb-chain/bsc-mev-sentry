@@ -71,6 +71,7 @@ type Client struct {
 	backend  ChainBackend
 	contract common.Address
 	timeout  time.Duration
+	close    func()
 }
 
 // Dial connects to rpcURL and returns a Client for the registry at contract.
@@ -79,7 +80,17 @@ func Dial(ctx context.Context, rpcURL string, contract common.Address) (*Client,
 	if err != nil {
 		return nil, fmt.Errorf("registry: dial %s: %w", rpcURL, err)
 	}
-	return NewClient(&ethBackend{ec}, contract), nil
+	c := NewClient(&ethBackend{ec}, contract)
+	c.close = ec.Close
+	return c, nil
+}
+
+// Close releases the RPC client created by Dial. A backend supplied to NewClient
+// remains owned by its caller.
+func (c *Client) Close() {
+	if c.close != nil {
+		c.close()
+	}
 }
 
 // NewClient wraps an existing backend.

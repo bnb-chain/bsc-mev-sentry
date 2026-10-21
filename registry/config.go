@@ -14,7 +14,7 @@ import (
 
 const (
 	DefaultPollInterval = 15 * time.Second
-	// DefaultFetchTimeout bounds one registry read (header + eth_call).
+	// DefaultFetchTimeout bounds one RPC source attempt (dial + header + eth_call).
 	DefaultFetchTimeout = 10 * time.Second
 )
 
@@ -30,8 +30,8 @@ type Config struct {
 	Enabled bool
 	// ContractAddress is the BuilderKeyRegistry proxy address on this network.
 	ContractAddress common.Address
-	// RPCURL is the node used for eth_call. It should be the validator's own
-	// node: a third-party RPC could serve a forged builder set.
+	// RPCURL optionally supplies the first node to try before Validators.PrivateURL
+	// in configuration order. All sources must be trusted nodes on the same chain.
 	RPCURL string
 	// PollInterval between reads. Zero uses DefaultPollInterval. Reads are always
 	// taken at the finalized block, so a change is visible one poll after finality.
@@ -47,13 +47,28 @@ func (c *Config) Validate() error {
 	if c.ContractAddress == (common.Address{}) {
 		return errors.New("registry: ContractAddress is required")
 	}
-	if c.RPCURL == "" {
-		return errors.New("registry: RPCURL is required")
-	}
 	if c.PollInterval < 0 {
 		return errors.New("registry: PollInterval must be positive")
 	}
 	return nil
+}
+
+// RPCURLs returns distinct, non-empty sources in priority order: the optional
+// explicit RPCURL, followed by each validator's PrivateURL.
+func (c *Config) RPCURLs(validators []node.ValidatorConfig) []string {
+	var urls []string
+	seen := make(map[string]bool)
+	add := func(url string) {
+		if url != "" && !seen[url] {
+			urls = append(urls, url)
+			seen[url] = true
+		}
+	}
+	add(c.RPCURL)
+	for _, validator := range validators {
+		add(validator.PrivateURL)
+	}
+	return urls
 }
 
 func (c *Config) pollInterval() time.Duration {
