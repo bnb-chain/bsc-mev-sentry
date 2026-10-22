@@ -92,6 +92,31 @@ func TestMevSentry_RegistryStatusReflectsState(t *testing.T) {
 	require.Equal(t, 1, st.BuilderCount)
 }
 
+func TestBuilderSet_AllowAll(t *testing.T) {
+	x := common.HexToAddress("0x1")
+	y := common.HexToAddress("0x2")
+	set := NewBuilderSet(map[common.Address]node.Builder{x: &stubBuilder{}})
+	s := NewMevSentryWithSet(&Config{}, nil, set, NewRegistryState(true, common.Address{}, 1))
+
+	has, err := s.HasBuilder(context.Background(), y)
+	require.NoError(t, err)
+	require.False(t, has)
+	require.Equal(t, ModeAllowlist, s.RegistryStatus().Mode)
+
+	require.True(t, set.SetAllowAll(true))
+	require.False(t, set.SetAllowAll(true), "no change when already in allow-all")
+	has, err = s.HasBuilder(context.Background(), y)
+	require.NoError(t, err)
+	require.True(t, has)
+	_, ok := set.Lookup(y)
+	require.False(t, ok, "URL lookup still uses the allowlist map")
+	require.Equal(t, ModeAllowAll, s.RegistryStatus().Mode)
+
+	require.True(t, set.SetAllowAll(false))
+	require.False(t, set.Allowed(y))
+	require.True(t, set.Allowed(x))
+}
+
 func TestNewMevSentry_StaticPathStillWorks(t *testing.T) {
 	addr := common.HexToAddress("0x1")
 	s := NewMevSentry(&Config{}, nil, map[common.Address]node.Builder{addr: nil})

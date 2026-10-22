@@ -21,8 +21,7 @@ PublicHostName = "bsc-testnet-ararat.bnbchain.org"
 PayAccountMode = "privateKey"
 PrivateKey = "ce3f1b757384...755f66f647503"
 
-# Static builder allowlist. With [Registry] enabled this is only the bootstrap set
-# used until the first successful on-chain read; afterwards it is ignored.
+# Static builder allowlist. Ignored when [Registry] is enabled.
 [[Builders]]
 Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5" # The address of the builder.
 URL = "http://bsc-builder-1" # The public URL of the builder.
@@ -32,9 +31,9 @@ Address = "0x980A75eCd1309eA12fa2ED87A8744fBfc9b863D5"
 URL = "http://bsc-builder-2"
 
 # Optional: keep the allowlist in sync with the on-chain BuilderKeyRegistry.
-# Effective allowlist = (registry set, or [[Builders]] until first read) ∪ ExtraBuilders.
-# A failed read never changes the allowlist. A successfully decoded registry is authoritative,
-# even when empty. ExtraBuilders are also added to the static list before the first read.
+# Effective allowlist = registry set ∪ ExtraBuilders. Service ports open after the first
+# successful read. A failed read never changes the allowlist. An empty registry switches to
+# allow-all mode (any builder address accepted, logged at error level) until it is refilled.
 [Registry]
 Enabled = false
 ContractAddress = "0x0000000000000000000000000000000000000000" # BuilderKeyRegistry proxy on this network.
@@ -42,7 +41,7 @@ ContractAddress = "0x0000000000000000000000000000000000000000" # BuilderKeyRegis
 # Optionally try another trusted node first, then fall back to the validators:
 # RPCURL = "http://10.200.31.36:8545"
 # All sources must be on the same chain. Each source attempt has a 10-second timeout.
-PollInterval = "15s" # Reads are taken at the finalized block; a change is visible one poll after finality.
+PollInterval = "10m" # While non-empty. Empty registry: 15s. Failed reads: 2s backoff up to 1m.
 
 # Always accepted in addition to the registry set (e.g. a validator's own builder).
 # [[Registry.ExtraBuilders]]

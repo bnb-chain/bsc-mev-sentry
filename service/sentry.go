@@ -77,6 +77,10 @@ func NewMevSentryWithSet(cfg *Config,
 func (s *MevSentry) RegistryStatus() RegistryStatus {
 	st := s.registry.Snapshot()
 	st.BuilderCount = s.builders.Len()
+	st.Mode = ModeAllowlist
+	if s.builders.AllowAll() {
+		st.Mode = ModeAllowAll
+	}
 	return st
 }
 
@@ -104,7 +108,7 @@ func (s *MevSentry) SendBid(ctx context.Context, args BidArgsWrapper) (bidHash c
 		log.Errorw("failed to parse bid signature", "err", err)
 		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
-	} else if _, ok := s.builders.Lookup(builder); !ok {
+	} else if !s.builders.Allowed(builder) {
 		log.Errorw("builder not registered", "address", builder)
 		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
@@ -197,7 +201,7 @@ func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper, 
 		log.Errorw("failed to parse bid block signature", "err", err)
 		err = buildertypes.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
 		return
-	} else if _, ok := s.builders.Lookup(builder); !ok {
+	} else if !s.builders.Allowed(builder) {
 		log.Errorw("builder not registered", "address", builder)
 		err = buildertypes.NewInvalidBidError("builder not registered")
 		return
@@ -308,25 +312,11 @@ func (s *MevSentry) Running(ctx context.Context) (running bool, err error) {
 	return validator.MevRunning(), nil
 }
 
-func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (has bool, err error) {
-	method := "mev_hasBuilder"
-	start := time.Now()
-	defer recordLatency(method, start)
-	defer timeoutCancel(&ctx, s.timeout)()
-	defer func() {
-		if err != nil {
-			if rpcErr, ok := err.(rpc.Error); ok {
-				metrics.ApiErrorCounter.WithLabelValues(method, strconv.Itoa(rpcErr.ErrorCode())).Inc()
-			}
-		}
-	}()
-
-	validator, err := s.validatorFromRequest(ctx, "")
-	if err != nil {
-		return
-	}
-
-	return validator.HasBuilder(ctx, builder)
+// HasBuilder answers from the sentry allowlist, which is what admits bids, rather
+// than from the validator node's own list.
+func (s *MevSentry) HasBuilder(ctx context.Context, builder common.Address) (bool, error) {
+	defer recordLatency("mev_hasBuilder", time.Now())
+	return s.builders.Allowed(builder), nil
 }
 
 func (s *MevSentry) ReportIssue(ctx context.Context, issue buildertypes.BidIssue) (err error) {

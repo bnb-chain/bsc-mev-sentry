@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -285,56 +286,98 @@ func TestSyncer_ErrorKeepsPreviousSet(t *testing.T) {
 	require.Equal(t, "registry", state.Snapshot().Source)
 }
 
-// A decoded empty registry is authoritative: removing the last key must take
-// effect, leaving only the local ExtraBuilders.
-func TestSyncer_EmptyRegistryIsApplied(t *testing.T) {
+// An empty registry switches to allow-all mode but keeps the last non-empty set
+// for builder URLs; a non-empty registry switches back.
+func TestSyncer_EmptyRegistryEntersAllowAll(t *testing.T) {
 	cfg := Config{ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}}}
-	static := map[common.Address]node.Builder{a4: node.NewBuilder(node.BuilderConfig{Address: a4})}
 	reader := &fakeReader{snaps: []*Snapshot{
 		snapOf(6, b(a1, "u", "n")),
 		snapOf(7), // admin removed the last key
-		snapOf(8), // still empty: unchanged, no rebuild
+		snapOf(8), // still empty
+		snapOf(9, b(a2, "u2", "n")),
 	}}
-	s, set, state := newSyncer(reader, cfg, static)
+	s, set, state := newSyncer(reader, cfg, nil)
 
 	require.Equal(t, ResultApplied, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a1: true, a3: true}, addrs(set))
+	require.False(t, set.AllowAll())
+	require.False(t, set.Allowed(a4))
 
 	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a3: true}, addrs(set), "registry key gone, extra stays")
+	require.True(t, set.AllowAll())
+	require.True(t, set.Allowed(a4), "allow-all admits unregistered addresses")
+	require.Equal(t, map[common.Address]bool{a1: true, a3: true}, addrs(set), "last non-empty set kept for URLs")
 	st := state.Snapshot()
 	require.Equal(t, "registry", st.Source)
 	require.Equal(t, uint64(7), st.BlockNumber)
-	require.Equal(t, 1, st.BuilderCount)
 	require.Empty(t, st.LastError, "an empty registry is a successful read, not an error")
 
-	require.Equal(t, ResultUnchanged, s.SyncOnce(context.Background()))
-	require.Equal(t, map[common.Address]bool{a3: true}, addrs(set))
+	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
+	require.True(t, set.AllowAll())
+
+	require.Equal(t, ResultApplied, s.SyncOnce(context.Background()))
+	require.False(t, set.AllowAll())
+	require.False(t, set.Allowed(a4))
+	require.Equal(t, map[common.Address]bool{a2: true, a3: true}, addrs(set))
 }
 
-func TestSyncer_EmptyRegistryBeforeAnySuccessReplacesStatic(t *testing.T) {
-	static := map[common.Address]node.Builder{a4: node.NewBuilder(node.BuilderConfig{Address: a4})}
+func TestSyncer_EmptyFirstReadKeepsExtraBuilderURLs(t *testing.T) {
+	cfg := Config{ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}}}
 	reader := &fakeReader{snaps: []*Snapshot{snapOf(5)}}
-	s, set, _ := newSyncer(reader, Config{}, static)
+	s, set, _ := newSyncer(reader, cfg, nil)
 
 	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
-	require.Equal(t, 0, set.Len(), "static bootstrap set is superseded by the (empty) registry")
+	require.True(t, set.AllowAll())
+	bld, ok := set.Lookup(a3)
+	require.True(t, ok)
+	require.Equal(t, "mine", bld.(node.BuilderConfigurer).Config().URL)
 }
 
-// Local additions must be accepted from process start, not only after the first sync.
-func TestBootstrap_AddsExtraBuildersToStaticSet(t *testing.T) {
-	cfg := Config{
-		ExtraBuilders: []node.BuilderConfig{{Address: a3, URL: "mine"}},
+func TestSyncer_ReadyAfterFirstSuccess(t *testing.T) {
+	reader := &fakeReader{
+		snaps: []*Snapshot{nil, snapOf(5)},
+		errs:  []error{errors.New("down"), nil},
 	}
-	static := []node.BuilderConfig{{Address: a1, URL: "s1"}, {Address: a2, URL: "s2"}}
+	s, _, _ := newSyncer(reader, Config{}, nil)
 
-	got := Bootstrap(&cfg, static)
+	require.Equal(t, ResultError, s.SyncOnce(context.Background()))
+	select {
+	case <-s.Ready():
+		t.Fatal("ready before any successful read")
+	default:
+	}
 
-	require.Equal(t, []node.BuilderConfig{
-		{Address: a1, URL: "s1"},
-		{Address: a2, URL: "s2"},
-		{Address: a3, URL: "mine"},
-	}, got, "static builders retained and extra a3 added before any registry read")
+	require.Equal(t, ResultEmpty, s.SyncOnce(context.Background()))
+	select {
+	case <-s.Ready():
+	default:
+		t.Fatal("an empty registry is a successful first read")
+	}
+}
+
+func TestSyncer_NextDelay(t *testing.T) {
+	s, set, _ := newSyncer(&fakeReader{}, Config{}, nil)
+
+	var got []time.Duration
+	for i := 0; i < 7; i++ {
+		got = append(got, s.nextDelay(ResultError))
+	}
+	require.Equal(t, []time.Duration{
+		2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		32 * time.Second, time.Minute, time.Minute,
+	}, got)
+
+	require.Equal(t, DefaultPollInterval, s.nextDelay(ResultApplied))
+	require.Equal(t, MinRetryInterval, s.nextDelay(ResultError), "success resets the backoff")
+
+	set.SetAllowAll(true)
+	require.Equal(t, AllowAllPollInterval, s.nextDelay(ResultEmpty))
+
+	short, set, _ := newSyncer(&fakeReader{}, Config{PollInterval: service.Duration(5 * time.Second)}, nil)
+	require.Equal(t, 2*time.Second, short.nextDelay(ResultError))
+	require.Equal(t, 4*time.Second, short.nextDelay(ResultError))
+	require.Equal(t, 5*time.Second, short.nextDelay(ResultError), "retries never wait longer than PollInterval")
+	set.SetAllowAll(true)
+	require.Equal(t, 5*time.Second, short.nextDelay(ResultEmpty))
 }
 
 func TestSyncer_UnchangedFingerprintDoesNotRebuild(t *testing.T) {

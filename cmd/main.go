@@ -56,19 +56,20 @@ func main() {
 		}
 	}
 
-	// Static allowlist from [[Builders]]. With [Registry] enabled this is only the
-	// bootstrap set, including local ExtraBuilders; the syncer
-	// replaces it after the first successful read.
-	static := cfg.Builders
-	if cfg.Registry.Enabled {
-		static = registry.Bootstrap(&cfg.Registry, cfg.Builders)
-	}
-	builders := make(map[common.Address]node.Builder, len(static))
-	for _, b := range static {
-		builders[b.Address] = node.NewBuilder(b)
+	// Static allowlist from [[Builders]], used only when registry sync is disabled.
+	builders := make(map[common.Address]node.Builder)
+	if !cfg.Registry.Enabled {
+		for _, b := range cfg.Builders {
+			builders[b.Address] = node.NewBuilder(b)
+		}
+	} else if len(cfg.Builders) > 0 {
+		log.Warnw("[[Builders]] is ignored while registry sync is enabled", "count", len(cfg.Builders))
 	}
 	builderSet := service.NewBuilderSet(builders)
 	registryState := service.NewRegistryState(cfg.Registry.Enabled, cfg.Registry.ContractAddress, len(builders))
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	var registryWG sync.WaitGroup
@@ -84,12 +85,23 @@ func main() {
 			"rpcSources", rpcURLs,
 			"pollInterval", cfg.Registry.EffectivePollInterval().String(),
 			"extra", len(cfg.Registry.ExtraBuilders))
+		syncer := registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState)
 		registryWG.Add(1)
 		go func() {
 			defer registryWG.Done()
 			defer reader.Close()
-			registry.NewSyncer(&cfg.Registry, reader, builderSet, registryState).Run(rootCtx)
+			syncer.Run(rootCtx)
 		}()
+
+		// Service ports stay closed until the allowlist comes from the registry.
+		log.Infow("waiting for the first registry read before opening service ports")
+		select {
+		case <-syncer.Ready():
+			log.Infow("first registry read succeeded; opening service ports")
+		case sig := <-sigCh:
+			log.Infow("received signal before the first registry read, shutting down", "signal", sig.String())
+			return
+		}
 	}
 
 	rpcServer := rpc.NewServer()
@@ -126,8 +138,6 @@ func main() {
 	}()
 
 	// Drain both listeners on a signal or HTTP failure.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case sig := <-sigCh:
 		log.Infow("received signal, shutting down", "signal", sig.String())

@@ -74,7 +74,7 @@ BuilderKeyRegistry contract published by the Good Will Alliance
 [Registry]
 Enabled = true
 ContractAddress = "0x..."            # registry proxy address on this network
-PollInterval = "15s"
+PollInterval = "10m"
 # RPCURL = "http://<trusted-node>:8545"  # optional: try this node before the validators
 
 [[Registry.ExtraBuilders]]           # always accepted in addition to the registry set
@@ -91,28 +91,33 @@ Behavior:
   Each source gets up to 10 seconds for the complete attempt, so a poll can take up to 10 seconds
   per distinct source when nodes time out. Shutdown cancels the current attempt and stops retries.
 - Both the finalized header and contract state are read from the same source.
-- Effective allowlist = (registry set, or the static `[[Builders]]` until the first successful read)
-  ∪ `ExtraBuilders`.
-- Every `PollInterval` the sentry reads `getBuilders()` at the finalized block, so an applied change
-  is never rolled back by a reorg; a registry update becomes visible one poll after it is finalized.
-  If the set changed it is swapped
-  in atomically; requests never see a half-updated allowlist.
-- If all sources fail, the previous allowlist stays in place and a warning is logged.
-  A successfully decoded registry is authoritative even when it is empty, so removing the last key
-  takes effect (the allowlist then contains only `ExtraBuilders`); this is logged as a warning and
-  counted under `result="empty"`. A misconfigured `ContractAddress` does not look like an empty
-  registry: it fails with `no_code_at_address` and keeps the previous set.
-- Before the first successful read, the static `[[Builders]]` list is combined with
-  `ExtraBuilders`, so local additions are accepted from process start.
+- The static `[[Builders]]` list is ignored. The HTTP and gRPC service ports open only after the
+  first successful read; until then the sentry keeps retrying, and SIGINT/SIGTERM still shut it down.
+- Effective allowlist = registry set ∪ `ExtraBuilders`.
+- Reads take `getBuilders()` at the finalized block, so an applied change is never rolled back by a
+  reorg. If the set changed it is swapped in atomically; requests never see a half-updated allowlist.
+- Poll schedule: every `PollInterval` (default 10 minutes) while the registry is non-empty; every
+  15 seconds while it is empty; after a failed read, including the first one, retry from 2 seconds
+  with exponential backoff up to 1 minute. Neither shorter interval exceeds `PollInterval`.
+- If all sources fail, the current allowlist and mode stay in place and a warning is logged.
+  A misconfigured `ContractAddress` fails with `no_code_at_address` and keeps the current state.
+- An empty registry switches the sentry to allow-all mode: `mev_sendBid`, `mev_sendBidBlock` and
+  `mev_hasBuilder` accept any builder address. Signature checks, rate limits and the builder fee
+  ceiling still apply. Every empty read is logged at error level and counted under
+  `result="empty"`. The last non-empty set is kept so `mev_reportIssue` can still reach builders.
+  The next non-empty read switches back to allowlist mode.
+- `mev_hasBuilder` answers from the sentry allowlist rather than from the validator node.
 - A builder whose issue-reporting URL cannot be dialed is still allowlisted; the connection is retried
   on the next `mev_reportIssue`.
 
 Observability:
 
-- `mev_registryStatus` (read-only RPC) returns the source (`static` or `registry`), the block number,
+- `mev_registryStatus` (read-only RPC) returns the source (`static` or `registry`), the mode
+  (`allowlist` or `allow_all`), the block number,
   block hash, fetch time and fingerprint of the applied snapshot, the effective builder count, and the
   class of the last error (`eth_call_failed`, `resolve_block_failed`, `no_code_at_address`,
   `decode_failed`, `timeout`, `fetch_failed`). The full error, which may contain the
   node URL, is only written to the sentry log. Two sentries reporting the same fingerprint hold the same set.
 - Prometheus: `bsc_mev_sentry_registry_sync_total{result}`, `bsc_mev_sentry_registry_synced_block`,
-  `bsc_mev_sentry_registry_builder_count`, `bsc_mev_sentry_registry_last_success_timestamp_seconds`.
+  `bsc_mev_sentry_registry_builder_count`, `bsc_mev_sentry_registry_allow_all` (1 in allow-all mode;
+  alert on it), `bsc_mev_sentry_registry_last_success_timestamp_seconds`.

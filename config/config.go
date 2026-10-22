@@ -17,8 +17,7 @@ import (
 type Config struct {
 	Service    service.Config
 	Validators []node.ValidatorConfig
-	// Builders is the static allowlist. With Registry.Enabled it only serves as
-	// the bootstrap set until the first successful on-chain read.
+	// Builders is the static allowlist. It is ignored when Registry.Enabled.
 	Builders []node.BuilderConfig
 	// Registry optionally synchronizes Builders from the on-chain registry.
 	Registry registry.Config

@@ -73,17 +73,6 @@ func Merge(base []Builder, extra []node.BuilderConfig) []node.BuilderConfig {
 	return list
 }
 
-// Bootstrap derives the allowlist to serve before the first successful registry
-// read: the static [[Builders]] plus ExtraBuilders, so local additions are
-// accepted from process start.
-func Bootstrap(cfg *Config, static []node.BuilderConfig) []node.BuilderConfig {
-	base := make([]Builder, 0, len(static))
-	for _, s := range static {
-		base = append(base, Builder{Addr: s.Address, URL: s.URL})
-	}
-	return Merge(base, cfg.ExtraBuilders)
-}
-
 // Diff returns addresses present in next but not prev, and vice versa.
 func Diff(prev, next []Builder) (added, removed []common.Address) {
 	p := make(map[common.Address]struct{}, len(prev))
