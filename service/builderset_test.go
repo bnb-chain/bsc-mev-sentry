@@ -5,9 +5,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
-	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 )

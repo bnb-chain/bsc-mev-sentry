@@ -28,8 +28,8 @@ const (
 // Syncer periodically reads the registry and pushes the merged allowlist to the
 // sentry. A failed read never changes the allowlist or the mode. A non-empty
 // registry selects allowlist mode; an empty one selects allow-all mode, which
-// keeps the last non-empty allowlist for builder URLs. Misconfigured addresses
-// surface as ErrNoCode (no code at address) and are treated as failures.
+// keeps the last non-empty allowlist for builder URLs. Missing code and a failed
+// initialized-registry check are treated as read failures.
 type Syncer struct {
 	reader   Reader
 	interval time.Duration
@@ -193,6 +193,8 @@ func ErrorClass(err error) string {
 		return "no_code_at_address"
 	case errors.Is(err, ErrDecode):
 		return "decode_failed"
+	case errors.Is(err, ErrNotRegistry):
+		return "not_a_registry"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.Is(err, ErrResolveBlock):

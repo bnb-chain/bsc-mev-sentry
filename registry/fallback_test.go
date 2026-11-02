@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 )

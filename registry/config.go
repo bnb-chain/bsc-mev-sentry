@@ -16,7 +16,7 @@ const (
 	DefaultPollInterval = 10 * time.Minute
 	// AllowAllPollInterval applies while the registry is empty, so a refilled
 	// registry ends allow-all mode quickly.
-	AllowAllPollInterval = 15 * time.Second
+	AllowAllPollInterval = 3 * time.Second
 	// Failed reads, including the first one at startup, retry with exponential
 	// backoff between these bounds.
 	MinRetryInterval = 2 * time.Second

@@ -15,8 +15,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// Only the read method the sentry needs. Hand-written instead of abigen output so
-// the sentry does not depend on generated code for a single view call.
+// Only the read methods the sentry needs. Hand-written instead of abigen output
+// so the sentry does not depend on generated code for these view calls.
 const builderRegistryABI = `[{
   "type": "function", "name": "getBuilders", "stateMutability": "view", "inputs": [],
   "outputs": [{"name": "", "type": "tuple[]", "components": [
@@ -24,15 +24,19 @@ const builderRegistryABI = `[{
     {"name": "url",  "type": "string"},
     {"name": "name", "type": "string"}
   ]}]
+}, {
+  "type": "function", "name": "defaultMaxKeys", "stateMutability": "view", "inputs": [],
+  "outputs": [{"name": "", "type": "uint256"}]
 }]`
 
 // Sentinel errors classify a failed read. The syncer reports only the class through
 // mev_registryStatus; the wrapped cause (which may contain the node URL) stays in logs.
 var (
 	ErrResolveBlock = errors.New("registry: resolve block tag")
-	ErrCall         = errors.New("registry: eth_call getBuilders")
+	ErrCall         = errors.New("registry: eth_call")
 	ErrNoCode       = errors.New("registry: empty eth_call result; is ContractAddress correct on this network?")
 	ErrDecode       = errors.New("registry: decode getBuilders")
+	ErrNotRegistry  = errors.New("registry: invalid defaultMaxKeys; use an initialized BuilderKeyRegistry proxy")
 )
 
 var registryABI = func() abi.ABI {
@@ -114,7 +118,7 @@ func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 	}
 	out, err := c.backend.CallContractAtHash(ctx, ethereum.CallMsg{To: &c.contract, Data: data}, header.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrCall, err)
+		return nil, fmt.Errorf("%w: getBuilders: %w", ErrCall, err)
 	}
 	if len(out) == 0 {
 		// An address with no code returns empty output rather than an error.
@@ -123,6 +127,27 @@ func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 	var builders []Builder
 	if err := registryABI.UnpackIntoInterface(&builders, "getBuilders", out); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
+	}
+	// The uninitialized implementation also returns an ABI-encoded empty list.
+	// The proxy always has a positive defaultMaxKeys, even before its first key
+	// is added. Read both values at the same finalized hash to distinguish them.
+	probe, err := registryABI.Pack("defaultMaxKeys")
+	if err != nil {
+		return nil, err
+	}
+	capOutput, err := c.backend.CallContractAtHash(ctx, ethereum.CallMsg{To: &c.contract, Data: probe}, header.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("%w: defaultMaxKeys: %w", ErrCall, err)
+	}
+	if len(capOutput) != 32 {
+		return nil, ErrNotRegistry
+	}
+	values, err := registryABI.Unpack("defaultMaxKeys", capOutput)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotRegistry, err)
+	}
+	if values[0].(*big.Int).Sign() == 0 {
+		return nil, ErrNotRegistry
 	}
 	return &Snapshot{
 		Builders:    builders,

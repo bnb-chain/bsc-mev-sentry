@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
@@ -93,6 +95,11 @@ type fakeBackend struct {
 	gotHash   common.Hash
 	gotTo     common.Address
 	gotNumber *big.Int
+	capOutput []byte
+	capErr    error
+	capHash   common.Hash
+	capTo     common.Address
+	capCalls  int
 }
 
 func (f *fakeBackend) HeaderByNumber(_ context.Context, number *big.Int) (*headerLite, error) {
@@ -101,6 +108,14 @@ func (f *fakeBackend) HeaderByNumber(_ context.Context, number *big.Int) (*heade
 }
 
 func (f *fakeBackend) CallContractAtHash(_ context.Context, msg ethereum.CallMsg, blockHash common.Hash) ([]byte, error) {
+	if bytes.Equal(msg.Data, registryABI.Methods["defaultMaxKeys"].ID) {
+		f.capHash, f.capTo = blockHash, *msg.To
+		f.capCalls++
+		if f.capOutput != nil || f.capErr != nil {
+			return f.capOutput, f.capErr
+		}
+		return common.LeftPadBytes([]byte{4}, 32), nil
+	}
 	f.gotHash = blockHash
 	f.gotTo = *msg.To
 	return f.output, f.callErr
@@ -137,6 +152,9 @@ func TestClient_FetchDecodesContractOutput(t *testing.T) {
 	require.Equal(t, common.HexToHash("0xabc"), fb.gotHash)
 	require.Equal(t, contract, fb.gotTo)
 	require.Equal(t, rpc.FinalizedBlockNumber.Int64(), fb.gotNumber.Int64())
+	require.Equal(t, 1, fb.capCalls)
+	require.Equal(t, fb.gotHash, fb.capHash, "both reads must use the same finalized block")
+	require.Equal(t, contract, fb.capTo)
 }
 
 func TestClient_FetchErrors(t *testing.T) {
@@ -377,7 +395,11 @@ func TestSyncer_NextDelay(t *testing.T) {
 	require.Equal(t, 4*time.Second, short.nextDelay(ResultError))
 	require.Equal(t, 5*time.Second, short.nextDelay(ResultError), "retries never wait longer than PollInterval")
 	set.SetAllowAll(true)
-	require.Equal(t, 5*time.Second, short.nextDelay(ResultEmpty))
+	require.Equal(t, 3*time.Second, short.nextDelay(ResultEmpty))
+
+	tiny, set, _ := newSyncer(&fakeReader{}, Config{PollInterval: service.Duration(time.Second)}, nil)
+	set.SetAllowAll(true)
+	require.Equal(t, time.Second, tiny.nextDelay(ResultEmpty), "allow-all polling never waits longer than PollInterval")
 }
 
 func TestSyncer_UnchangedFingerprintDoesNotRebuild(t *testing.T) {
