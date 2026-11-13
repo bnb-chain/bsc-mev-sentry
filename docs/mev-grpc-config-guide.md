@@ -1,6 +1,4 @@
-# Exposing a Validator's MEV gRPC Endpoint
-
-Validators can expose MEV RPC and gRPC through an AWS Application Load Balancer (ALB) or Network Load Balancer (NLB). Only `SendBidBlock` supports gRPC among the MEV business APIs; other MEV APIs continue to use JSON-RPC.
+# Support gRPC on MEV Sentry and Validator
 
 ## Enable gRPC on the Components
 
@@ -42,13 +40,17 @@ An empty `GRPCListenAddr` disables gRPC. Keep `PrivateURL` unchanged (WebSocket 
 
 Restart each component after changing its configuration. If both run on the same host, avoid binding the same address and port; for example, use validator gRPC port `8553` and update the sentry's `GRPCURL` accordingly.
 
-## Public Endpoint Requirements
+## Exposing a Validator's MEV gRPC Endpoint
+
+Validators can expose MEV RPC and gRPC through an AWS Application Load Balancer (ALB) or Network Load Balancer (NLB). Only `SendBidBlock` supports gRPC among the MEV business APIs; other MEV APIs continue to use JSON-RPC.
+
+### Public Endpoint Requirements
 
 The examples below assume sentry HTTP JSON-RPC on **8545** and plaintext HTTP/2 gRPC on **8552**. Replace these with your actual ports.
 
 Both public deployment options require a **TLS-capable gRPC client**. The internal Builder implementation reviewed at commit `6363f2c3d` uses `insecure.NewCredentials()` and cannot connect directly to these TLS listeners. It needs TLS support with certificate and hostname verification, or a client-side TLS-origination proxy. Changing the target address alone does not enable TLS.
 
-## Option 1: ALB — Share Port 443
+### Option 1: ALB — Share Port 443
 
 Use this option to serve RPC and gRPC through the same domain and public port, with nginx behind the ALB.
 
@@ -90,7 +92,7 @@ Client endpoints:
 
 Only the listed gRPC services are exposed. Add rules when introducing another service. Path matching does not validate the request protocol.
 
-## Option 2: NLB — Separate Ports
+### Option 2: NLB — Separate Ports
 
 Use this option for port-based forwarding without nginx or path rules.
 
@@ -115,13 +117,13 @@ Client endpoints:
 
 This option exposes all gRPC services registered by the sentry. ALPN is protocol negotiation, not method filtering or authorization.
 
-## Verification
+### Verification
 
 First verify sentry-to-validator connectivity. Then call `/grpc.health.v1.Health/Check` on the public endpoint, if implemented, specifying service `mev.v1.BidBlockService`. Require both **grpc-status: 0** and a decoded response of **status: SERVING**. HTTP 200 alone is insufficient. Sentry health does not verify downstream validator connectivity in the reviewed implementation.
 
 Finally, submit a valid, signed `SendBidBlock` in an authorized test environment. Correlate the bid hash with the sentry's gRPC forwarding logs and the validator response to confirm the full path, rather than a direct builder-to-validator call or JSON-RPC fallback. A successful submission does not guarantee that the bid wins and is sealed.
 
-## Note: WAF Troubleshooting
+### Note: WAF Troubleshooting
 
 If an ALB has a WAF attached, a passing Health check does not prove that BidBlock requests will pass. Investigate payload-dependent failures using WAF logs or sampled requests, ALB logs, and sentry logs; identify the terminating rule and matching field where available before changing policy.
 
