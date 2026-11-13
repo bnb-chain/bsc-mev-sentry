@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
 )
 
 const (
-	bidBlockQuotaTTL        = time.Minute
-	maxBidBlockQuotaEntries = 4096
+	bidBlockQuotaTTL               = time.Minute
+	maxBidBlockQuotaEntries        = 4096
+	maxBidBlockQuotaBuilderHeights = 256
 )
 
 type bidBlockQuotaKey struct {
@@ -28,9 +28,10 @@ type bidBlockQuotaEntry struct {
 }
 
 type bidBlockQuota struct {
-	mu        sync.Mutex
-	entries   map[bidBlockQuotaKey]*bidBlockQuotaEntry
-	nextSweep time.Time
+	mu             sync.Mutex
+	entries        map[bidBlockQuotaKey]*bidBlockQuotaEntry
+	builderHeights map[common.Address]int
+	nextSweep      time.Time
 }
 
 // Match the validator's generic JSON-RPC duplicate/quota errors on both ingress paths.
@@ -59,7 +60,7 @@ func (q *bidBlockQuota) reserve(limit uint32, block uint64, builder common.Addre
 	if !now.Before(q.nextSweep) {
 		for key, entry := range q.entries {
 			if !now.Before(entry.expires) {
-				delete(q.entries, key)
+				q.forget(key)
 			}
 		}
 		q.nextSweep = now.Add(time.Second)
@@ -67,7 +68,7 @@ func (q *bidBlockQuota) reserve(limit uint32, block uint64, builder common.Addre
 	key := bidBlockQuotaKey{block, builder}
 	entry := q.entries[key]
 	if entry != nil && !now.Before(entry.expires) {
-		delete(q.entries, key)
+		q.forget(key)
 		entry = nil
 	}
 	if entry != nil && entry.bids[hash] {
@@ -81,15 +82,19 @@ func (q *bidBlockQuota) reserve(limit uint32, block uint64, builder common.Addre
 		return nil, bidBlockQuotaError(fmt.Sprintf("too many bids: exceeded limit of %d bids per builder per block", limit))
 	}
 	if entry == nil {
-		// Never evict live records to make room: that would reset their quota.
-		if len(q.entries) >= maxBidBlockQuotaEntries {
-			return nil, buildertypes.ErrMevBusy
+		// Bound each builder independently so arbitrary heights cannot consume
+		// the shared cache. At either capacity limit, defer to the validator
+		// instead of rejecting unrelated builders or evicting live quotas.
+		if q.builderHeights[builder] >= maxBidBlockQuotaBuilderHeights || len(q.entries) >= maxBidBlockQuotaEntries {
+			return func(error) {}, nil
 		}
 		if q.entries == nil {
 			q.entries = make(map[bidBlockQuotaKey]*bidBlockQuotaEntry)
+			q.builderHeights = make(map[common.Address]int)
 		}
 		entry = &bidBlockQuotaEntry{expires: now.Add(bidBlockQuotaTTL), bids: make(map[common.Hash]bool)}
 		q.entries[key] = entry
+		q.builderHeights[builder]++
 	}
 	entry.bids[hash] = true
 	return func(err error) {
@@ -101,4 +106,13 @@ func (q *bidBlockQuota) reserve(limit uint32, block uint64, builder common.Addre
 			}
 		}
 	}, nil
+}
+
+// forget is called with q.mu held and removes both sides of the accounting.
+func (q *bidBlockQuota) forget(key bidBlockQuotaKey) {
+	delete(q.entries, key)
+	q.builderHeights[key.builder]--
+	if q.builderHeights[key.builder] == 0 {
+		delete(q.builderHeights, key.builder)
+	}
 }

@@ -191,20 +191,71 @@ func TestBidBlockQuotaFollowsCachedParams(t *testing.T) {
 	require.ErrorContains(t, err, "too many bids")
 }
 
+func TestBidBlockQuotaBuilderCannotExhaustSharedCache(t *testing.T) {
+	var q bidBlockQuota
+	now := time.Now()
+	attacker, other := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	for i := 0; i < maxBidBlockQuotaEntries; i++ {
+		finish, err := q.reserve(2, uint64(i), attacker, common.Hash{}, now)
+		require.NoError(t, err)
+		finish(errors.New("block in future")) // downstream rejection must not poison other builders
+	}
+	require.Len(t, q.entries, maxBidBlockQuotaBuilderHeights)
+	require.Equal(t, maxBidBlockQuotaBuilderHeights, q.builderHeights[attacker])
+	finish, err := q.reserve(2, 100, other, common.Hash{}, now)
+	require.NoError(t, err)
+	finish(nil)
+	require.Equal(t, 1, q.builderHeights[other])
+	require.Len(t, q.entries, maxBidBlockQuotaBuilderHeights+1)
+}
+
+func TestBidBlockQuotaConcurrentHeightCapacity(t *testing.T) {
+	v := newQuotaTestValidator(2)
+	var wg sync.WaitGroup
+	errors := make(chan error, 2*maxBidBlockQuotaBuilderHeights)
+	for i := 0; i < cap(errors); i++ {
+		wg.Add(1)
+		go func(block uint64) {
+			defer wg.Done()
+			finish, err := v.ReserveBidBlock(block, common.Address{}, common.Hash{})
+			if err == nil {
+				finish(nil)
+			}
+			errors <- err
+		}(uint64(i))
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	require.Len(t, v.bidBlocks.entries, maxBidBlockQuotaBuilderHeights)
+	require.Equal(t, maxBidBlockQuotaBuilderHeights, v.bidBlocks.builderHeights[common.Address{}])
+}
+
 func TestBidBlockQuotaBoundedAndExpires(t *testing.T) {
 	var q bidBlockQuota
 	now := time.Now()
 	for i := 0; i < maxBidBlockQuotaEntries; i++ {
-		_, err := q.reserve(1, uint64(i), common.Address{}, common.Hash{}, now)
+		builder := common.Address{19: byte(i / maxBidBlockQuotaBuilderHeights)}
+		_, err := q.reserve(1, uint64(i), builder, common.Hash{}, now)
 		require.NoError(t, err)
 	}
-	_, err := q.reserve(1, maxBidBlockQuotaEntries, common.Address{}, common.Hash{}, now)
-	require.ErrorIs(t, err, buildertypes.ErrMevBusy)
+	require.Len(t, q.entries, maxBidBlockQuotaEntries)
+	other := common.HexToAddress("0xff")
+	finish, err := q.reserve(1, 100, other, common.Hash{}, now)
+	require.NoError(t, err) // a full shared cache defers enforcement to the validator
+	finish(context.DeadlineExceeded)
+	require.Len(t, q.entries, maxBidBlockQuotaEntries)
+	require.Zero(t, q.builderHeights[other])
+	_, err = q.reserve(0, 100, other, common.Hash{}, now)
+	require.ErrorContains(t, err, "too many bids") // capacity fallback must not bypass a zero limit
 	_, err = q.reserve(1, 0, common.Address{}, common.Hash{}, now)
 	require.ErrorContains(t, err, "bid already exists") // live records were not evicted
-	_, err = q.reserve(1, maxBidBlockQuotaEntries, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
+	_, err = q.reserve(1, 100, other, common.Hash{}, now.Add(bidBlockQuotaTTL))
 	require.NoError(t, err)
 	require.Len(t, q.entries, 1)
+	require.Equal(t, map[common.Address]int{other: 1}, q.builderHeights)
 }
 
 func TestBidBlockQuotaLateCompletionDoesNotChangeNewEntry(t *testing.T) {
@@ -214,7 +265,20 @@ func TestBidBlockQuotaLateCompletionDoesNotChangeNewEntry(t *testing.T) {
 	require.NoError(t, err)
 	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
 	require.NoError(t, err)
+	require.Equal(t, 1, q.builderHeights[common.Address{}])
 	finish(context.DeadlineExceeded)
 	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
 	require.ErrorContains(t, err, "bid already exists")
+}
+
+func TestBidBlockQuotaEntryExpiryRestoresBuilderCapacity(t *testing.T) {
+	var q bidBlockQuota
+	now := time.Now()
+	_, err := q.reserve(1, 100, common.Address{}, common.Hash{}, now)
+	require.NoError(t, err)
+	q.nextSweep = now.Add(2 * bidBlockQuotaTTL) // exercise per-entry expiry without a full sweep
+	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
+	require.NoError(t, err)
+	require.Len(t, q.entries, 1)
+	require.Equal(t, 1, q.builderHeights[common.Address{}])
 }
