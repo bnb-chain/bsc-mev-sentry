@@ -109,6 +109,14 @@ func TestBidBlockSidecarRLPRoundtrip(t *testing.T) {
 type mockValidator struct {
 	gotBuilder common.Address
 	gotHash    common.Hash
+	reserve    func(uint64, common.Address, common.Hash) (func(error), error)
+}
+
+func (m *mockValidator) ReserveBidBlock(block uint64, builder common.Address, hash common.Hash) (func(error), error) {
+	if m.reserve != nil {
+		return m.reserve(block, builder, hash)
+	}
+	return func(error) {}, nil
 }
 
 func (m *mockValidator) SendBidBlock(_ context.Context, _ buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
@@ -180,6 +188,30 @@ func TestGRPCIngressMatchesJSONPath(t *testing.T) {
 	require.Equal(t, common.BytesToHash(resp.BidHash), jsonVal.gotHash)
 	require.Equal(t, jsonVal.gotBuilder, grpcVal.gotBuilder)
 	require.Equal(t, builderAddr, grpcVal.gotBuilder)
+}
+
+func TestBidBlockQuotaCheckedOnBothIngressPaths(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	block := sampleBidBlock()
+	sig, err := crypto.Sign(block.Hash().Bytes(), key)
+	require.NoError(t, err)
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+	v := &mockValidator{reserve: func(uint64, common.Address, common.Hash) (func(error), error) {
+		return nil, wireError{-32000, "bid already exists"}
+	}}
+	sentry := NewMevSentry(&Config{}, map[string]node.Validator{"val-1": v},
+		map[common.Address]node.Builder{crypto.PubkeyToAddress(key.PublicKey): nil})
+	_, err = sentry.SendBidBlock(context.Background(), BidBlockArgsWrapper{
+		BidBlockArgs: buildertypes.BidBlockArgs{BidBlock: block, Signature: sig}, ValidatorHostName: "val-1",
+	})
+	require.ErrorContains(t, err, "bid already exists")
+	_, err = (&BidBlockServer{sentry: sentry}).SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
+		BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1",
+	})
+	require.ErrorContains(t, err, "bid already exists")
+	require.Equal(t, common.Hash{}, v.gotHash) // neither ingress forwarded the rejected bid
 }
 
 // wireError mimics the *rpc.jsonError the ethclient returns for validator errors
@@ -448,7 +480,7 @@ func TestGRPCConcurrencyLimitAcrossConnections(t *testing.T) {
 
 // A full limit must reject without queueing.
 func TestBidBlockAdmission(t *testing.T) {
-	require.Equal(t, uint32(32), maxGRPCStreams(defaultGRPCConcurrency))
+	require.Equal(t, uint32(66), maxGRPCStreams(defaultGRPCConcurrency))
 	require.Equal(t, uint32(80), maxGRPCStreams(64))
 
 	sem := make(chan struct{}, 1)

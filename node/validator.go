@@ -26,7 +26,8 @@ import (
 )
 
 var (
-	PayBidTxGasUsed = uint64(25000)
+	PayBidTxGasUsed    = uint64(25000)
+	errBidBlockTimeout = errors.New("timeout when send bid block to validator")
 
 	dialer = &net.Dialer{
 		Timeout:   5 * time.Second,
@@ -49,6 +50,7 @@ var (
 
 type Validator interface {
 	SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error)
+	ReserveBidBlock(block uint64, builder common.Address, bidHash common.Hash) (func(error), error)
 	SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error)
 	// SendBidBlockRLP forwards over gRPC; it returns ErrGRPCNotConfigured without GRPCURL.
 	SendBidBlockRLP(ctx context.Context, bidBlockRLP, signature []byte, builder common.Address, bidHash common.Hash) (common.Hash, error)
@@ -127,6 +129,7 @@ type validator struct {
 	client     *ethclient.Client
 	grpc       *bidBlockGRPCClient // nil without GRPCURL
 	payAccount account.Account
+	bidBlocks  bidBlockQuota
 
 	scheduler         *gocron.Scheduler
 	chainID           atomic.Pointer[big.Int]
@@ -163,8 +166,9 @@ func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlock
 			"bidHash", bidHash.TerminalString(),
 			"err", err)
 
-		if strings.Contains(err.Error(), "timeout") {
-			err = errors.New("timeout when send bid block to validator")
+		var rpcErr rpc.Error
+		if !errors.As(err, &rpcErr) && strings.Contains(err.Error(), "timeout") {
+			err = errBidBlockTimeout
 		}
 	}
 	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder,

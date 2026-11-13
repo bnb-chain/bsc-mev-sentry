@@ -36,7 +36,7 @@ type Config struct {
 }
 
 // Default limit for in-flight gRPC BidBlocks.
-const defaultGRPCConcurrency = 16
+const defaultGRPCConcurrency = 50
 
 type MevSentry struct {
 	timeout         Duration
@@ -171,6 +171,9 @@ func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper, 
 		err = buildertypes.NewInvalidBidError("empty BidBlock or Header")
 		return
 	}
+	if args.BidBlock.Header.Number == nil || !args.BidBlock.Header.Number.IsUint64() {
+		return common.Hash{}, buildertypes.NewInvalidBidError("invalid BidBlock number")
+	}
 	signingHash := args.BidBlock.Hash()
 	builder, err := args.EcrecoverSender()
 	if err != nil {
@@ -188,6 +191,15 @@ func (s *MevSentry) sendBidBlock(ctx context.Context, args BidBlockArgsWrapper, 
 	if err != nil {
 		return
 	}
+
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	finish, err := validator.ReserveBidBlock(args.BidBlock.Header.Number.Uint64(), builder, signingHash)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	defer func() { finish(err) }()
 
 	log.Debugw("[BID BLOCK SENT]", "block", args.BidBlock.Header.Number, "builder", builder, "hash", signingHash.TerminalString())
 	if bidBlockRLP != nil {
