@@ -4,7 +4,7 @@ Validators can expose MEV RPC and gRPC through an AWS Application Load Balancer 
 
 ## Enable gRPC on the Components
 
-Merge these settings into an existing MEV deployment. Keep the other required settings unchanged.
+The following configurations are recommended for enabling gRPC on the Validator and MEV Sentry.
 
 ### Validator
 
