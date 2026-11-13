@@ -49,6 +49,7 @@ var (
 
 type Validator interface {
 	SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error)
+	ReserveBidBlock(block uint64, builder common.Address, bidHash common.Hash) (func(error), error)
 	SendBidBlock(ctx context.Context, args buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error)
 	// SendBidBlockRLP forwards over gRPC; it returns ErrGRPCNotConfigured without GRPCURL.
 	SendBidBlockRLP(ctx context.Context, bidBlockRLP, signature []byte, builder common.Address, bidHash common.Hash) (common.Hash, error)
@@ -127,6 +128,7 @@ type validator struct {
 	client     *ethclient.Client
 	grpc       *bidBlockGRPCClient // nil without GRPCURL
 	payAccount account.Account
+	bidBlocks  bidBlockQuota
 
 	scheduler         *gocron.Scheduler
 	chainID           atomic.Pointer[big.Int]
