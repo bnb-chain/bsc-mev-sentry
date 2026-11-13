@@ -540,7 +540,7 @@ func TestGRPCConcurrencyLimitAcrossConnections(t *testing.T) {
 
 // A full limit must reject without queueing.
 func TestBidBlockAdmission(t *testing.T) {
-	require.Equal(t, uint32(32), maxGRPCStreams(defaultGRPCConcurrency))
+	require.Equal(t, uint32(66), maxGRPCStreams(defaultGRPCConcurrency))
 	require.Equal(t, uint32(80), maxGRPCStreams(64))
 
 	sem := make(chan struct{}, 1)

@@ -36,7 +36,7 @@ type Config struct {
 }
 
 // Default limit for in-flight gRPC BidBlocks.
-const defaultGRPCConcurrency = 16
+const defaultGRPCConcurrency = 50
 
 type MevSentry struct {
 	timeout         Duration
