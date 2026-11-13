@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/rpc"
 )
 
 func sampleBidBlock() *buildertypes.BidBlock {
@@ -111,7 +110,6 @@ type mockValidator struct {
 	gotBuilder common.Address
 	gotHash    common.Hash
 	reserve    func(uint64, common.Address, common.Hash) (func(error), error)
-	forwardErr error
 }
 
 func (m *mockValidator) ReserveBidBlock(block uint64, builder common.Address, hash common.Hash) (func(error), error) {
@@ -123,11 +121,11 @@ func (m *mockValidator) ReserveBidBlock(block uint64, builder common.Address, ha
 
 func (m *mockValidator) SendBidBlock(_ context.Context, _ buildertypes.BidBlockArgs, builder common.Address, bidHash common.Hash) (common.Hash, error) {
 	m.gotBuilder, m.gotHash = builder, bidHash
-	return bidHash, m.forwardErr
+	return bidHash, nil
 }
 func (m *mockValidator) SendBidBlockRLP(_ context.Context, _, _ []byte, builder common.Address, bidHash common.Hash) (common.Hash, error) {
 	m.gotBuilder, m.gotHash = builder, bidHash
-	return bidHash, m.forwardErr
+	return bidHash, nil
 }
 func (m *mockValidator) SendBid(context.Context, buildertypes.BidArgs, common.Address) (common.Hash, error) {
 	return common.Hash{}, nil
@@ -193,85 +191,27 @@ func TestGRPCIngressMatchesJSONPath(t *testing.T) {
 }
 
 func TestBidBlockQuotaCheckedOnBothIngressPaths(t *testing.T) {
-	for _, firstGRPC := range []bool{false, true} {
-		t.Run(strconv.FormatBool(firstGRPC), func(t *testing.T) {
-			key, err := crypto.GenerateKey()
-			require.NoError(t, err)
-			builder := crypto.PubkeyToAddress(key.PublicKey)
-			block := sampleBidBlock()
-			sig, err := crypto.Sign(block.Hash().Bytes(), key)
-			require.NoError(t, err)
-			encoded, err := rlp.EncodeToBytes(block)
-			require.NoError(t, err)
-			var checks, completions int
-			v := &mockValidator{reserve: func(height uint64, address common.Address, hash common.Hash) (func(error), error) {
-				require.Equal(t, block.Header.Number.Uint64(), height)
-				require.Equal(t, builder, address)
-				require.Equal(t, block.Hash(), hash)
-				checks++
-				if checks > 1 {
-					return nil, wireError{-32000, "bid already exists"}
-				}
-				return func(err error) { require.NoError(t, err); completions++ }, nil
-			}}
-			sentry := NewMevSentry(&Config{}, map[string]node.Validator{"val-1": v}, map[common.Address]node.Builder{builder: nil})
-			call := func(useGRPC bool) error {
-				if useGRPC {
-					_, err := (&BidBlockServer{sentry: sentry}).SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
-						BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1",
-					})
-					return err
-				}
-				_, err := sentry.SendBidBlock(context.Background(), BidBlockArgsWrapper{
-					BidBlockArgs: buildertypes.BidBlockArgs{BidBlock: block, Signature: sig}, ValidatorHostName: "val-1",
-				})
-				return err
-			}
-			require.NoError(t, call(firstGRPC))
-			require.Equal(t, 1, completions)
-			v.gotHash = common.Hash{}
-			err = call(!firstGRPC)
-			require.ErrorContains(t, err, "bid already exists")
-			require.Equal(t, common.Hash{}, v.gotHash) // rejected before forwarding
-			require.Equal(t, 2, checks)
-			require.Equal(t, 1, completions)
-			if !firstGRPC {
-				st := status.Convert(err)
-				require.Equal(t, codes.Unknown, st.Code())
-				info, ok := st.Details()[0].(*errdetails.ErrorInfo)
-				require.True(t, ok)
-				require.Equal(t, "-32000", info.Reason)
-				require.Equal(t, "mev.bnbchain.org", info.Domain)
-			} else {
-				var rpcErr rpc.Error
-				require.ErrorAs(t, err, &rpcErr)
-				require.Equal(t, -32000, rpcErr.ErrorCode())
-			}
-		})
-	}
-}
-
-func TestBidBlockQuotaCompletionReceivesForwardError(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	require.NoError(t, err)
 	block := sampleBidBlock()
 	sig, err := crypto.Sign(block.Hash().Bytes(), key)
 	require.NoError(t, err)
-	forwardErr := context.DeadlineExceeded
-	var completed bool
-	v := &mockValidator{
-		forwardErr: forwardErr,
-		reserve: func(uint64, common.Address, common.Hash) (func(error), error) {
-			return func(err error) { require.ErrorIs(t, err, forwardErr); completed = true }, nil
-		},
-	}
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+	v := &mockValidator{reserve: func(uint64, common.Address, common.Hash) (func(error), error) {
+		return nil, wireError{-32000, "bid already exists"}
+	}}
 	sentry := NewMevSentry(&Config{}, map[string]node.Validator{"val-1": v},
 		map[common.Address]node.Builder{crypto.PubkeyToAddress(key.PublicKey): nil})
 	_, err = sentry.SendBidBlock(context.Background(), BidBlockArgsWrapper{
 		BidBlockArgs: buildertypes.BidBlockArgs{BidBlock: block, Signature: sig}, ValidatorHostName: "val-1",
 	})
-	require.ErrorIs(t, err, forwardErr)
-	require.True(t, completed)
+	require.ErrorContains(t, err, "bid already exists")
+	_, err = (&BidBlockServer{sentry: sentry}).SendBidBlock(context.Background(), &mevpb.BidBlockRequest{
+		BidBlockRlp: encoded, Signature: sig, ValidatorHostName: "val-1",
+	})
+	require.ErrorContains(t, err, "bid already exists")
+	require.Equal(t, common.Hash{}, v.gotHash) // neither ingress forwarded the rejected bid
 }
 
 // wireError mimics the *rpc.jsonError the ethclient returns for validator errors

@@ -26,7 +26,8 @@ import (
 )
 
 var (
-	PayBidTxGasUsed = uint64(25000)
+	PayBidTxGasUsed    = uint64(25000)
+	errBidBlockTimeout = errors.New("timeout when send bid block to validator")
 
 	dialer = &net.Dialer{
 		Timeout:   5 * time.Second,
@@ -165,8 +166,9 @@ func (n *validator) SendBidBlock(ctx context.Context, args buildertypes.BidBlock
 			"bidHash", bidHash.TerminalString(),
 			"err", err)
 
-		if strings.Contains(err.Error(), "timeout") {
-			err = errors.New("timeout when send bid block to validator")
+		var rpcErr rpc.Error
+		if !errors.As(err, &rpcErr) && strings.Contains(err.Error(), "timeout") {
+			err = errBidBlockTimeout
 		}
 	}
 	log.Debugw("[BID BLOCK RESP]", "block", args.BidBlock.Header.Number, "builder", builder,

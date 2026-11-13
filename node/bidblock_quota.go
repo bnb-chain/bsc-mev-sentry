@@ -1,11 +1,18 @@
 package node
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 const (
@@ -21,10 +28,12 @@ type bidBlockQuotaKey struct {
 
 type bidBlockQuotaEntry struct {
 	expires time.Time
-	// True means in-flight or successful. Failed attempts can retry the same
-	// hash without consuming another slot; an RPC failure does not prove that
-	// the validator did not receive the bid.
-	bids map[common.Hash]bool
+	bids    map[common.Hash]bidBlockQuotaBid
+}
+
+type bidBlockQuotaBid struct {
+	blocked  bool // in-flight, completed, or retry budget exhausted
+	attempts uint8
 }
 
 type bidBlockQuota struct {
@@ -42,7 +51,7 @@ func (e bidBlockQuotaError) ErrorCode() int { return -32000 }
 
 // ReserveBidBlock shares a quota across JSON-RPC and gRPC for this validator.
 // Call finish with the forwarding result. Distinct attempts keep their quota
-// even on failure, but the same failed hash remains retryable.
+// even on failure; an ambiguous transport failure permits one same-hash retry.
 func (n *validator) ReserveBidBlock(block uint64, builder common.Address, hash common.Hash) (finish func(error), err error) {
 	params := n.mevParams.Load()
 	if params == nil {
@@ -71,41 +80,67 @@ func (q *bidBlockQuota) reserve(limit uint32, block uint64, builder common.Addre
 		q.forget(key)
 		entry = nil
 	}
-	if entry != nil && entry.bids[hash] {
-		return nil, bidBlockQuotaError("bid already exists")
-	}
+	var bid bidBlockQuotaBid
 	exists := false
 	if entry != nil {
-		_, exists = entry.bids[hash]
+		bid, exists = entry.bids[hash]
+		if bid.blocked {
+			return nil, bidBlockQuotaError("bid already exists")
+		}
 	}
 	if limit == 0 || (!exists && entry != nil && uint64(len(entry.bids)) >= uint64(limit)) {
 		return nil, bidBlockQuotaError(fmt.Sprintf("too many bids: exceeded limit of %d bids per builder per block", limit))
 	}
 	if entry == nil {
-		// Bound each builder independently so arbitrary heights cannot consume
-		// the shared cache. At either capacity limit, defer to the validator
-		// instead of rejecting unrelated builders or evicting live quotas.
-		if q.builderHeights[builder] >= maxBidBlockQuotaBuilderHeights || len(q.entries) >= maxBidBlockQuotaEntries {
+		// Reject only this builder at its height cap. A full shared cache still
+		// defers to the validator rather than rejecting unrelated builders.
+		if q.builderHeights[builder] >= maxBidBlockQuotaBuilderHeights {
+			return nil, bidBlockQuotaError("too many target heights for builder")
+		}
+		if len(q.entries) >= maxBidBlockQuotaEntries {
 			return func(error) {}, nil
 		}
 		if q.entries == nil {
 			q.entries = make(map[bidBlockQuotaKey]*bidBlockQuotaEntry)
 			q.builderHeights = make(map[common.Address]int)
 		}
-		entry = &bidBlockQuotaEntry{expires: now.Add(bidBlockQuotaTTL), bids: make(map[common.Hash]bool)}
+		entry = &bidBlockQuotaEntry{expires: now.Add(bidBlockQuotaTTL), bids: make(map[common.Hash]bidBlockQuotaBid)}
 		q.entries[key] = entry
 		q.builderHeights[builder]++
 	}
-	entry.bids[hash] = true
+	bid.blocked = true
+	bid.attempts++
+	entry.bids[hash] = bid
 	return func(err error) {
-		if err != nil {
+		if bid.attempts == 1 && retryableBidBlockError(err) {
 			q.mu.Lock()
 			defer q.mu.Unlock()
-			if q.entries[key] == entry {
-				entry.bids[hash] = false
+			if q.entries[key] == entry && entry.bids[hash] == bid {
+				bid.blocked = false
+				entry.bids[hash] = bid
 			}
 		}
 	}, nil
+}
+
+func retryableBidBlockError(err error) bool {
+	var rpcErr rpc.Error
+	if err == nil || errors.As(err, &rpcErr) {
+		return false // includes MEV TooLate mapped to gRPC DeadlineExceeded
+	}
+	if errors.Is(err, errBidBlockTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	default:
+		return false
+	}
 }
 
 // forget is called with q.mu held and removes both sides of the accounting.

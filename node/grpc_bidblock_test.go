@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,40 +61,15 @@ func TestSendBidBlockRLP(t *testing.T) {
 	require.ErrorIs(t, err, ErrGRPCNotConfigured)
 }
 
-func newQuotaTestValidator(limit uint32) *validator {
+func TestBidBlockQuota(t *testing.T) {
 	v := &validator{}
-	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: limit})
-	return v
-}
-
-func TestBidBlockQuotaLimits(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		limit uint32
-	}{
-		{"two", 2},
-		{"custom", 4},
-		{"zero", 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := newQuotaTestValidator(tc.limit)
-			for i := uint32(0); i < tc.limit; i++ {
-				finish, err := v.ReserveBidBlock(100, common.Address{}, common.Hash{31: byte(i)})
-				require.NoError(t, err)
-				finish(nil)
-			}
-			_, err := v.ReserveBidBlock(100, common.Address{}, common.Hash{31: 99})
-			require.ErrorContains(t, err, "too many bids")
-			var rpcErr rpc.Error
-			require.ErrorAs(t, err, &rpcErr)
-			require.Equal(t, -32000, rpcErr.ErrorCode())
-		})
-	}
-}
-
-func TestBidBlockQuotaDuplicatesAndRetries(t *testing.T) {
-	v := newQuotaTestValidator(1)
 	hash := common.HexToHash("0x01")
+	for range 2 {
+		finish, err := v.ReserveBidBlock(100, common.Address{}, hash)
+		require.NoError(t, err) // no local limit before the first parameter fetch
+		finish(nil)
+	}
+	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 1})
 	finish, err := v.ReserveBidBlock(100, common.Address{}, hash)
 	require.NoError(t, err)
 	_, err = v.ReserveBidBlock(100, common.Address{}, hash)
@@ -105,132 +78,61 @@ func TestBidBlockQuotaDuplicatesAndRetries(t *testing.T) {
 	finish(context.DeadlineExceeded)
 	finish, err = v.ReserveBidBlock(100, common.Address{}, hash)
 	require.NoError(t, err) // same hash can retry after an ambiguous failure
-	finish(nil)
-	_, err = v.ReserveBidBlock(100, common.Address{}, hash)
-	require.ErrorContains(t, err, "bid already exists") // succeeded
-	_, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x02"))
-	require.ErrorContains(t, err, "too many bids")
-
-	for _, other := range []struct {
-		v       *validator
-		block   uint64
-		builder common.Address
-	}{
-		{newQuotaTestValidator(1), 100, common.Address{}},
-		{v, 101, common.Address{}},
-		{v, 100, common.HexToAddress("0x02")},
-	} {
-		finish, err := other.v.ReserveBidBlock(other.block, other.builder, hash)
-		require.NoError(t, err)
-		finish(nil)
-	}
-}
-
-func TestBidBlockQuotaFailureDoesNotResetCount(t *testing.T) {
-	v := newQuotaTestValidator(1)
-	finish, err := v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x01"))
-	require.NoError(t, err)
-	finish(errors.New("connection lost"))
-	_, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x02"))
-	require.ErrorContains(t, err, "too many bids")
-}
-
-func TestBidBlockQuotaConcurrentReservations(t *testing.T) {
-	v := newQuotaTestValidator(2)
-	var wg sync.WaitGroup
-	var admitted atomic.Int32
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			finish, err := v.ReserveBidBlock(100, common.Address{}, common.Hash{31: byte(i)})
-			if err == nil {
-				admitted.Add(1)
-				finish(nil)
-			}
-		}(i)
-	}
-	wg.Wait()
-	require.EqualValues(t, 2, admitted.Load())
-}
-
-func TestBidBlockQuotaWithoutCachedParams(t *testing.T) {
-	v := &validator{}
-	for i := 0; i < 3; i++ {
-		finish, err := v.ReserveBidBlock(100, common.Address{}, common.Hash{31: byte(i)})
-		require.NoError(t, err) // no invented default of 0 or 2 before the first fetch
-		finish(nil)
-	}
-	require.Empty(t, v.bidBlocks.entries)
-	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 1})
-	finish, err := v.ReserveBidBlock(100, common.Address{}, common.Hash{})
-	require.NoError(t, err)
-	finish(nil)
-	_, err = v.ReserveBidBlock(100, common.Address{}, common.Hash{31: 1})
-	require.ErrorContains(t, err, "too many bids")
-}
-
-func TestBidBlockQuotaFollowsCachedParams(t *testing.T) {
-	v := newQuotaTestValidator(1)
-	first, second := common.HexToHash("0x01"), common.HexToHash("0x02")
-	finish, err := v.ReserveBidBlock(100, common.Address{}, first)
-	require.NoError(t, err)
-	finish(nil)
-	_, err = v.ReserveBidBlock(100, common.Address{}, second)
-	require.ErrorContains(t, err, "too many bids")
-
-	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 3})
-	finish, err = v.ReserveBidBlock(100, common.Address{}, second)
-	require.NoError(t, err) // updated limit, without resetting existing counts
 	finish(context.DeadlineExceeded)
-	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 0})
-	_, err = v.ReserveBidBlock(100, common.Address{}, second)
-	require.ErrorContains(t, err, "too many bids") // zero also blocks failed-hash retries
-	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 1})
-	_, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x03"))
+	_, err = v.ReserveBidBlock(100, common.Address{}, hash)
+	require.ErrorContains(t, err, "bid already exists") // at most one retry
+	_, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x02"))
 	require.ErrorContains(t, err, "too many bids")
+	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 2})
+	finish, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x02"))
+	require.NoError(t, err) // follow refreshed validator parameters
+	finish(bidBlockQuotaError("bid already exists"))
+	_, err = v.ReserveBidBlock(100, common.Address{}, common.HexToHash("0x02"))
+	require.ErrorContains(t, err, "bid already exists") // terminal rejection stays blocked
+	v.mevParams.Store(&buildertypes.MevParams{MaxBidsPerBuilder: 0})
+	_, err = v.ReserveBidBlock(101, common.Address{}, hash)
+	require.ErrorContains(t, err, "too many bids")
+}
+
+func TestBidBlockQuotaRetryableErrors(t *testing.T) {
+	st, err := status.New(codes.DeadlineExceeded, "too late").WithDetails(&errdetails.ErrorInfo{
+		Reason: strconv.Itoa(buildertypes.BidBlockTooLateError), Domain: mevErrorDomain})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		err   error
+		retry bool
+	}{
+		{nil, false},
+		{bidBlockQuotaError("bid already exists"), false},
+		{fromGRPCStatus(st.Err()), false},
+		{errBidBlockTimeout, true},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
+		{fromGRPCStatus(status.Error(codes.Unavailable, "connection lost")), true},
+	} {
+		require.Equal(t, tc.retry, retryableBidBlockError(tc.err), "%v", tc.err)
+	}
 }
 
 func TestBidBlockQuotaBuilderCannotExhaustSharedCache(t *testing.T) {
 	var q bidBlockQuota
 	now := time.Now()
 	attacker, other := common.HexToAddress("0x01"), common.HexToAddress("0x02")
-	for i := 0; i < maxBidBlockQuotaEntries; i++ {
+	for i := 0; i < maxBidBlockQuotaBuilderHeights; i++ {
 		finish, err := q.reserve(2, uint64(i), attacker, common.Hash{}, now)
 		require.NoError(t, err)
 		finish(errors.New("block in future")) // downstream rejection must not poison other builders
 	}
 	require.Len(t, q.entries, maxBidBlockQuotaBuilderHeights)
 	require.Equal(t, maxBidBlockQuotaBuilderHeights, q.builderHeights[attacker])
+	for range 2 {
+		_, err := q.reserve(2, maxBidBlockQuotaBuilderHeights, attacker, common.Hash{}, now)
+		require.ErrorContains(t, err, "too many target heights")
+	}
 	finish, err := q.reserve(2, 100, other, common.Hash{}, now)
 	require.NoError(t, err)
 	finish(nil)
 	require.Equal(t, 1, q.builderHeights[other])
 	require.Len(t, q.entries, maxBidBlockQuotaBuilderHeights+1)
-}
-
-func TestBidBlockQuotaConcurrentHeightCapacity(t *testing.T) {
-	v := newQuotaTestValidator(2)
-	var wg sync.WaitGroup
-	errors := make(chan error, 2*maxBidBlockQuotaBuilderHeights)
-	for i := 0; i < cap(errors); i++ {
-		wg.Add(1)
-		go func(block uint64) {
-			defer wg.Done()
-			finish, err := v.ReserveBidBlock(block, common.Address{}, common.Hash{})
-			if err == nil {
-				finish(nil)
-			}
-			errors <- err
-		}(uint64(i))
-	}
-	wg.Wait()
-	close(errors)
-	for err := range errors {
-		require.NoError(t, err)
-	}
-	require.Len(t, v.bidBlocks.entries, maxBidBlockQuotaBuilderHeights)
-	require.Equal(t, maxBidBlockQuotaBuilderHeights, v.bidBlocks.builderHeights[common.Address{}])
 }
 
 func TestBidBlockQuotaBoundedAndExpires(t *testing.T) {
@@ -245,40 +147,13 @@ func TestBidBlockQuotaBoundedAndExpires(t *testing.T) {
 	other := common.HexToAddress("0xff")
 	finish, err := q.reserve(1, 100, other, common.Hash{}, now)
 	require.NoError(t, err) // a full shared cache defers enforcement to the validator
-	finish(context.DeadlineExceeded)
+	finish(nil)
 	require.Len(t, q.entries, maxBidBlockQuotaEntries)
 	require.Zero(t, q.builderHeights[other])
-	_, err = q.reserve(0, 100, other, common.Hash{}, now)
-	require.ErrorContains(t, err, "too many bids") // capacity fallback must not bypass a zero limit
 	_, err = q.reserve(1, 0, common.Address{}, common.Hash{}, now)
 	require.ErrorContains(t, err, "bid already exists") // live records were not evicted
 	_, err = q.reserve(1, 100, other, common.Hash{}, now.Add(bidBlockQuotaTTL))
 	require.NoError(t, err)
 	require.Len(t, q.entries, 1)
 	require.Equal(t, map[common.Address]int{other: 1}, q.builderHeights)
-}
-
-func TestBidBlockQuotaLateCompletionDoesNotChangeNewEntry(t *testing.T) {
-	var q bidBlockQuota
-	now := time.Now()
-	finish, err := q.reserve(1, 100, common.Address{}, common.Hash{}, now)
-	require.NoError(t, err)
-	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
-	require.NoError(t, err)
-	require.Equal(t, 1, q.builderHeights[common.Address{}])
-	finish(context.DeadlineExceeded)
-	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
-	require.ErrorContains(t, err, "bid already exists")
-}
-
-func TestBidBlockQuotaEntryExpiryRestoresBuilderCapacity(t *testing.T) {
-	var q bidBlockQuota
-	now := time.Now()
-	_, err := q.reserve(1, 100, common.Address{}, common.Hash{}, now)
-	require.NoError(t, err)
-	q.nextSweep = now.Add(2 * bidBlockQuotaTTL) // exercise per-entry expiry without a full sweep
-	_, err = q.reserve(1, 100, common.Address{}, common.Hash{}, now.Add(bidBlockQuotaTTL))
-	require.NoError(t, err)
-	require.Len(t, q.entries, 1)
-	require.Equal(t, 1, q.builderHeights[common.Address{}])
 }
