@@ -17,7 +17,7 @@ Enabled = true
 BidBlockEnabled = true
 GRPCDisabled = false
 GRPCPort = 8552
-GRPCConcurrency = 50 # Recommended maximum concurrent gRPC BidBlock requests
+GRPCConcurrency = 128 # Recommended maximum concurrent gRPC BidBlock requests
 ```
 
 If using command-line flags instead, set `--http --http.addr <private-ip>` together. Restrict the HTTP and gRPC ports to trusted access.
@@ -29,7 +29,7 @@ Enable the gRPC listener under `[Service]`, and add the downstream gRPC address 
 ```toml
 [Service]
 GRPCListenAddr = ":8552"
-GRPCConcurrency = 50 # Recommended maximum concurrent gRPC BidBlock requests
+GRPCConcurrency = 128 # Recommended maximum concurrent gRPC BidBlock requests
 
 [[Validators]]
 PublicHostName = "mev.example.org"
