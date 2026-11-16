@@ -10,13 +10,17 @@ import (
 	"github.com/naoina/toml"
 
 	"github.com/bnb-chain/bsc-mev-sentry/node"
+	"github.com/bnb-chain/bsc-mev-sentry/registry"
 	"github.com/bnb-chain/bsc-mev-sentry/service"
 )
 
 type Config struct {
 	Service    service.Config
 	Validators []node.ValidatorConfig
-	Builders   []node.BuilderConfig
+	// Builders is the static allowlist. It is ignored when Registry.Enabled.
+	Builders []node.BuilderConfig
+	// Registry optionally synchronizes Builders from the on-chain registry.
+	Registry registry.Config
 
 	Debug DebugConfig
 	Log   LogConfig
@@ -35,6 +39,12 @@ func Load(file string) *Config {
 	// Add file name to errors that have a line number.
 	if _, ok := err.(*toml.LineError); ok {
 		panic(err)
+	}
+	if err := cfg.Registry.Validate(); err != nil {
+		panic(err)
+	}
+	if cfg.Registry.Enabled && len(cfg.Registry.RPCURLs(cfg.Validators)) == 0 {
+		panic("registry: configure at least one Validators.PrivateURL or Registry.RPCURL")
 	}
 	return &cfg
 }
